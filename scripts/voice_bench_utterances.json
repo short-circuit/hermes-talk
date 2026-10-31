@@ -1,0 +1,90 @@
+{
+  "_comment": "20 scripted utterances for voice-brain router benchmarking. 'expect' is the ground-truth tool the router should select. Used by scripts/bench_voice.py.",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "delegate_to_hermes",
+        "description": "Hand a task to the Hermes agent. Use for anything that needs tools, files, memory, live data, device actions, or multi-step work.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "instruction": {
+              "type": "string",
+              "description": "The user's request, restated as a self-contained instruction for the agent."
+            }
+          },
+          "required": ["instruction"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "answer_direct",
+        "description": "Reply immediately without the agent. Use for small talk, greetings, opinions, the current time or date, and simple arithmetic on facts you already know.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The spoken reply."
+            }
+          },
+          "required": ["text"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "attach_file",
+        "description": "Attach a file the user just sent to the current conversation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "File name of the attachment the user referred to."
+            }
+          },
+          "required": ["filename"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "end_call",
+        "description": "End the conversation. Use when the user signals they are finished.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    }
+  ],
+  "utterances": [
+    {"id": 1,  "text": "What's the weather in Zurich tomorrow?",                 "expect": "delegate_to_hermes"},
+    {"id": 2,  "text": "Email Anna that the build is green.",                    "expect": "delegate_to_hermes"},
+    {"id": 3,  "text": "What's on my calendar this afternoon?",                  "expect": "delegate_to_hermes"},
+    {"id": 4,  "text": "Search the web for the latest graphics card prices.",    "expect": "delegate_to_hermes"},
+    {"id": 5,  "text": "Run the tests in the relay repo and tell me if they pass.", "expect": "delegate_to_hermes"},
+    {"id": 6,  "text": "Add milk to the shopping list.",                         "expect": "delegate_to_hermes"},
+    {"id": 7,  "text": "Summarise my last three emails.",                        "expect": "delegate_to_hermes"},
+    {"id": 8,  "text": "Turn off the lights in the kitchen.",                    "expect": "delegate_to_hermes"},
+    {"id": 9,  "text": "Hey, how are you?",                                      "expect": "answer_direct"},
+    {"id": 10, "text": "What time is it?",                                       "expect": "answer_direct"},
+    {"id": 11, "text": "What's seventeen times four?",                           "expect": "answer_direct"},
+    {"id": 12, "text": "Tell me a joke.",                                        "expect": "answer_direct"},
+    {"id": 13, "text": "Good morning!",                                          "expect": "answer_direct"},
+    {"id": 14, "text": "What's the capital of France?",                          "expect": "answer_direct"},
+    {"id": 15, "text": "Can you hear me?",                                       "expect": "answer_direct"},
+    {"id": 16, "text": "I just sent you a photo, attach it to this call.",       "expect": "attach_file"},
+    {"id": 17, "text": "Attach the PDF I uploaded a second ago.",                "expect": "attach_file"},
+    {"id": 18, "text": "Here's the file, please attach it.",                     "expect": "attach_file"},
+    {"id": 19, "text": "Thanks, that's all for now.",                            "expect": "end_call"},
+    {"id": 20, "text": "Bye, talk later.",                                       "expect": "end_call"}
+  ]
+}
