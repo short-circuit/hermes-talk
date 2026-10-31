@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node / web
+node_modules/
+dist/
+build/
+.next/
+
+# Android / Gradle
+.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Models and media (never commit weights)
+models/
+*.onnx
+*.gguf
+*.safetensors
+*.wav
+*.webm
+
+# Local state
+.hermes/
+data/
+inbox/
+outbox/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
