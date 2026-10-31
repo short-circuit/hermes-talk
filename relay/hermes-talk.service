@@ -1,0 +1,25 @@
+# Hermes Talk voice relay systemd unit stub.
+# The canonical deployment location is deploy/ (a separate task); this file
+# lives next to the relay package for reference only.
+[Unit]
+Description=Hermes Talk voice relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes-talk
+Group=hermes-talk
+EnvironmentFile=/etc/hermes-talk/relay.env
+WorkingDirectory=/opt/hermes-talk
+ExecStart=/opt/hermes-talk/.venv/bin/uvicorn relay.app:app --host ${RELAY_HOST} --port ${RELAY_PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hermes-talk
+
+[Install]
+WantedBy=multi-user.target
