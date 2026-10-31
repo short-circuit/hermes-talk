@@ -10,6 +10,9 @@
 3. **No generated or vendored clutter.** Build output, virtualenvs, model weights, caches, and IDE state
    stay out of git (see `.gitignore`).
 4. **Local-only.** A change that introduces a runtime dependency on an internet service needs an ADR.
+5. **Never use the TV as a test device.** The living-room Chromecast is reachable over ADB but is not an
+   Android test target: no `adb install`, no `am start`, nothing left running. Use an attached phone
+   (`adb -s <serial>`) or an emulator; if neither exists, defer on-device checks.
 
 ## Workflow
 
