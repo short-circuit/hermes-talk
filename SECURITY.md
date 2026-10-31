@@ -7,6 +7,8 @@ Please do not open a public issue for vulnerabilities.
 
 ## Model
 
+See `docs/security/threat-model.md` for the STRIDE register and the card that owns each mitigation.
+
 - The relay and the Hermes API server bind to loopback or the LAN; nothing is exposed to the internet.
 - Devices authenticate with per-device bearer tokens over TLS.
 - Destructive tool calls require a spoken confirmation; silence means deny.
