@@ -59,6 +59,10 @@ token, an oversized file, a committed `.env`, an mDNS hostname), asserts each ru
 allowlisted forms stay silent, then builds a throwaway repository that must pass clean and must fail once
 a secret is planted. CI runs it before the real scan, so a broken gate cannot report green.
 
+When planting a fake secret by hand, use a high-entropy value: gitleaks drops findings that contain a
+known placeholder stopword, and the alphabet run `abcdefghijklmnopqrstuvwxyz` is one. A `ghp_` token
+built from that run is ignored by gitleaks while a random one fires; R4 flags both.
+
 ### Local use
 
 ```bash
