@@ -31,7 +31,7 @@ throughput therefore sit slightly below what the same models reach on an idle ca
 
 | Candidate | Runtime | VRAM (MiB) | TTFT p50 | Decode tok/s p50 | Tool accuracy, text in | Tool accuracy, audio in | Licence |
 |---|---|---|---|---|---|---|---|
-| `LFM3-1.7B` Q4_K_M | llama.cpp 0.8.0 (CUDA) | 1 664 | 37 ms (35 ms second run) | 290 (390 second run) | 18/20 = 90 % (17/20 = 85 % second run; 10/20 with `tool_choice: auto`) | n/a | LFM Open License v1.0 |
+| `LFM3-1.7B` Q4_K_M | llama.cpp 0.8.0 (CUDA) | 1 664 | 35–45 ms across repeats | 212–390 across repeats | 18/20 = 90 % (17/20 = 85 % second run; 10/20 with `tool_choice: auto`) | n/a | LFM Open License v1.0 |
 | `LFM2-1.2B-Tool` Q4_K_M | llama.cpp 0.8.0 (CUDA) | 1 302 | 30 ms | 861 | 8/20 = 40 % (`tool_choice: auto`: 7/20 = 35 %) | n/a | LFM Open License v1.0 |
 | `LFM3-Audio-2B` Q4_K_M + Q8 audio projector | llama.cpp 0.8.0 (CUDA) | 2 376 | 44 ms text / 61 ms audio | 528 text / 497 audio | 16/20 = 80 % | 16/20 = 80 % | LFM Open License v1.0 |
 | `LFM2.5-Audio-1.5B` Q8 + Q8 projector | llama.cpp 0.8.0 (CUDA) | 2 234 | 15 ms text / 28 ms audio | 349 | 0/20 | 0/20 | LFM Open License v1.0 |
