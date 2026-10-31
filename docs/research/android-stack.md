@@ -190,7 +190,7 @@ Device: Google Chromecast with Google TV (`ro.product.device=sabrina`), Android 
 `ro.build.characteristics=tv,nosdcard`, output device HDMI only, **no** `android.hardware.microphone`
 feature. Toolchain: AGP 8.11.0, Kotlin 2.3.21, `compileSdk` 36, `minSdk` 26, `targetSdk` 34.
 
-Two build variants exist. The dependency-free one is 897 KB. The `probe` variant links the Pipecat
+Two build variants exist. The dependency-free one is about 0.9 MB. The `probe` variant links the Pipecat
 transport and measures 51.9 MB: 46.1 MB of that is `libjingle_peerconnection_so.so` for four ABIs
 (11.6 MB arm64-v8a, 15.6 MB x86_64), which is the real budget for a release build that ships arm64
 only (~12 MB). Linking it also pulls `androidx.appcompat` through `ai.pipecat:client`, so the client
