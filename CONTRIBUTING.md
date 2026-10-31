@@ -17,7 +17,9 @@
 ## Workflow
 
 - Branch from `main`; keep commits focused and imperative (`relay: add run event adapter`).
-- Run `pre-commit install` once, then `pre-commit run --all-files` before pushing.
+- Run `pre-commit install` once, then `pre-commit run --all-files` before pushing. The gitleaks hook
+  scans staged content only; `bash scripts/check_repo_hygiene.sh` scans the whole work tree and
+  `gitleaks git --log-opts=--all --redact` scans the full history.
 - Run `scripts/check_repo_hygiene.sh` before opening a PR.
 - Tests: `pytest relay/tests` and `./gradlew test` for the Android module.
 

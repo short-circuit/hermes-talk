@@ -1,48 +1,80 @@
 name: ci
 
+# Runs on every branch and every pull request so a leak cannot sit unmerged
+# without a red check. `main` is protected on the same two jobs.
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   secrets:
+    name: secrets (gitleaks, full history)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only required for organisation-owned repositories; ignored for personal accounts.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   hygiene:
+    name: hygiene (PII, home paths, LAN IPs, .env, large files)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      # Proves the gate still fails on planted data before it is trusted to pass.
+      - name: Gate self-test (planted fixtures must be rejected)
+        run: bash scripts/check_repo_hygiene.sh --self-test
       - name: Repository hygiene
         run: bash scripts/check_repo_hygiene.sh
 
   python:
+    name: python (lint, tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install ruff pytest
-      - run: ruff check relay
-      - run: pytest -q relay/tests
+      - run: python -m pip install -e "./relay[dev]"
+      - name: Lint
+        run: |
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no Python sources yet"
+          else
+            ruff check "${files[@]}"
+            ruff format --check "${files[@]}"
+          fi
+      - name: Tests
+        run: |
+          if [ -d relay/tests ]; then
+            pytest -q relay/tests
+          else
+            echo "no tests yet"
+          fi
 
   android:
+    name: android (gradle test)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: ${{ hashFiles('android/gradlew') != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"

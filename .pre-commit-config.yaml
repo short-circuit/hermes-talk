@@ -1,16 +1,32 @@
+# Local gate. CI is authoritative: .github/workflows/ci.yml runs gitleaks over the
+# full history plus the repository hygiene script. These hooks catch the same
+# classes of leak before a commit exists.
 repos:
+  # Staged secrets only (gitleaks pre-commit hook scans the index, not history).
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.24.0
+    rev: v8.30.1
     hooks:
       - id: gitleaks
+  # PII, home paths, LAN addresses, .env files and oversized blobs across the
+  # whole work tree, so untracked files are caught before `git add`.
+  - repo: local
+    hooks:
+      - id: repo-hygiene
+        name: repository hygiene (PII, home paths, LAN IPs, .env, large files)
+        entry: bash scripts/check_repo_hygiene.sh
+        language: system
+        pass_filenames: false
+        always_run: true
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.6
+    rev: v0.17.3
     hooks:
       - id: ruff
         args: [--fix]
+        files: ^relay/
       - id: ruff-format
+        files: ^relay/
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
@@ -18,3 +34,4 @@ repos:
         args: ["--maxkb=2048"]
       - id: check-yaml
       - id: check-json
+      - id: check-merge-conflict
