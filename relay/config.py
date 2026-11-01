@@ -40,7 +40,15 @@ class Settings(BaseSettings):
     hermes_api_key: SecretStr | None = None
     hermes_session_key: SecretStr | None = None
     localai_base_url: str = "http://127.0.0.1:8081"
-    voice_brain_model: str = "lfm3-audio-2b"
+    voice_brain_base_url: str = "http://127.0.0.1:8080"
+    voice_brain_model: str = "lfm3-1.7b"
+    voice_brain_temperature: float = 0.1
+    voice_brain_max_tokens: int = 160
+    voice_brain_tool_choice: str = "required"
+    voice_brain_deferred_tools: bool = False
+    voice_brain_first_token_timeout_s: float = 2.0
+    voice_brain_request_timeout_s: float = 20.0
+    voice_brain_max_utterance_chars: int = 2000
     stt_model: str = "whisper-1"
     tts_model: str = "kokoro"
     vad_model: str = "silero-vad"
@@ -184,7 +192,7 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return normalized
 
-    @field_validator("hermes_base_url", "localai_base_url")
+    @field_validator("hermes_base_url", "localai_base_url", "voice_brain_base_url")
     @classmethod
     def _validate_base_url(cls, value: str) -> str:
         parsed = urlsplit(value)
@@ -383,6 +391,66 @@ class Settings(BaseSettings):
     def _validate_retention_days(cls, value: int) -> int:
         if value < 0:
             msg = "retention days must be zero or greater (0 keeps data until manual delete)"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("voice_brain_temperature")
+    @classmethod
+    def _validate_voice_brain_temperature(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0.0 <= value <= 2.0:
+            msg = "voice_brain_temperature must be finite and between 0.0 and 2.0"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("voice_brain_max_tokens")
+    @classmethod
+    def _validate_voice_brain_max_tokens(cls, value: int) -> int:
+        if not 1 <= value <= 4096:
+            msg = "voice_brain_max_tokens must be between 1 and 4096"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("voice_brain_tool_choice")
+    @classmethod
+    def _validate_voice_brain_tool_choice(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"required", "auto"}:
+            msg = "voice_brain_tool_choice must be 'required' or 'auto'"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("voice_brain_deferred_tools", mode="before")
+    @classmethod
+    def _validate_voice_brain_deferred_tools(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        msg = "voice_brain_deferred_tools must be one of 1/0, true/false, yes/no, on/off"
+        raise ValueError(msg)
+
+    @field_validator(
+        "voice_brain_first_token_timeout_s",
+        "voice_brain_request_timeout_s",
+    )
+    @classmethod
+    def _validate_voice_brain_timeouts(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            msg = "voice_brain timeouts must be finite and greater than zero"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("voice_brain_max_utterance_chars")
+    @classmethod
+    def _validate_voice_brain_max_utterance_chars(cls, value: int) -> int:
+        if value < 1:
+            msg = "voice_brain_max_utterance_chars must be at least one"
             raise ValueError(msg)
         return value
 

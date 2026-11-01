@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "delegate_to_hermes",
+        "description": "Hand a task to the Hermes agent. Use for anything that needs tools, files, memory, live data, device actions, or multi-step work.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "instruction": {
+              "type": "string",
+              "description": "The user's request, restated as a self-contained instruction for the agent."
+            }
+          },
+          "required": ["instruction"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "answer_direct",
+        "description": "Reply immediately without the agent. Use for small talk, greetings, opinions, the current time or date, and simple arithmetic on facts you already know.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The spoken reply."
+            }
+          },
+          "required": ["text"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "attach_file",
+        "description": "Attach a file the user just sent to the current conversation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "File name of the attachment the user referred to."
+            }
+          },
+          "required": ["filename"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "end_call",
+        "description": "End the conversation. Use when the user signals they are finished.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    }
+  ]
+}

@@ -17,6 +17,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pillow>=10.4",
     "pypdf>=6.21",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,9 @@ speech = [
 [tool.setuptools]
 packages = ["relay", "relay.auth", "relay.brain", "relay.logging", "relay.speech", "relay.storage", "relay.api", "relay.maintenance"]
 package-dir = {relay = "."}
+
+[tool.setuptools.package-data]
+relay = ["brain/tools.json"]
 
 [tool.ruff]
 line-length = 100
