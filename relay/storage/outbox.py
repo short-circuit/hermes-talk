@@ -369,7 +369,9 @@ class OutboxStore:
     def open_artifact(self, artifact_id: str) -> ArtifactHandle:
         """Open one artifact for reading, enforcing confinement and expiry."""
         resolved, segments = self._resolve(artifact_id)
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        # O_NONBLOCK keeps a FIFO or device node from blocking the worker while
+        # it is opened; it is a no-op for regular files on Linux.
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
         try:
             descriptor = os.open(resolved, flags)
         except OSError as exc:
@@ -384,6 +386,10 @@ class OutboxStore:
             if not stat.S_ISREG(stat_result.st_mode):
                 msg = "the artifact is not a regular file"
                 raise ArtifactNotFoundError(detail=msg)
+            # Expiry is checked before hashing so an expired file is never read
+            # in full just to be rejected.
+            if self._is_expired(stat_result.st_mtime):
+                raise ArtifactExpiredError()
             relative_id = "/".join(segments)
             digest = self._cached_digest(
                 relative_id,
@@ -393,8 +399,6 @@ class OutboxStore:
             )
             head = os.pread(descriptor, _MAX_HEAD_BYTES, 0)
             os.lseek(descriptor, 0, os.SEEK_SET)
-            if self._is_expired(stat_result.st_mtime):
-                raise ArtifactExpiredError()
             artifact = Artifact(
                 id=relative_id,
                 name=resolved.name,
@@ -454,7 +458,7 @@ class OutboxStore:
         try:
             descriptor = os.open(
                 path,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
             )
             stat_result = os.fstat(descriptor)
             if not stat.S_ISREG(stat_result.st_mode):

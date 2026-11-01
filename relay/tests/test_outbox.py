@@ -339,3 +339,30 @@ def test_default_clock_is_used_when_none_is_supplied(tmp_path: Path) -> None:
     _write(store.root, "now.txt", b"now", mtime=time.time())
     handle = store.open_artifact("now.txt")
     handle.close()
+
+
+def test_fifo_is_not_found_and_does_not_block(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    os.mkfifo(store.root / "pipe")
+
+    with pytest.raises(ArtifactNotFoundError):
+        store.open_artifact("pipe")
+    assert store.list_artifacts() == []
+
+
+def test_expired_artifact_is_not_hashed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    real_hash = outbox_module._hash_fd
+
+    def counting_hash(descriptor: int) -> str:
+        calls.append(descriptor)
+        return real_hash(descriptor)
+
+    monkeypatch.setattr(outbox_module, "_hash_fd", counting_hash)
+    now = 1_700_000_000.0
+    store = _store(tmp_path, outbox_retention_days=1, clock=lambda: now)
+    _write(store.root, "old.txt", b"old", mtime=now - 2 * _SECONDS_PER_DAY)
+
+    with pytest.raises(ArtifactExpiredError):
+        store.open_artifact("old.txt")
+    assert calls == []
