@@ -1,0 +1,155 @@
+# Hermes Talk voice relay — reproducible local deployment.
+#
+# Everything configurable lives in .env next to this file (copy .env.example).
+# No secret is inlined here, so this file is safe to commit and to diff.
+#
+#   docker compose up -d --build     deploy
+#   docker compose ps                health
+#   docker compose down              stop, keep data
+#
+# Runtime is local-only: the relay, the proxy, and every model run on this
+# host. Nothing in this file reaches the internet.
+#
+# Host networking is deliberate. The relay must reach the Hermes API server and
+# the voice-brain server on the host's loopback, which a bridged container
+# cannot see; with `network_mode: host` the relay binds 127.0.0.1:8790 exactly
+# as the systemd unit does, and the proxy is the only LAN-facing listener.
+# See docs/DEPLOYMENT.md for the port table, health gate, and rollback.
+
+name: hermes-talk
+
+services:
+  # A fresh docker volume is owned by root, while the relay runs as uid 10001
+  # and must own its storage roots. This one-shot hands the volume over before
+  # the relay starts; the relay image runs as non-root, so it cannot do it.
+  volume-init:
+    image: ${RELAY_IMAGE:-hermes-talk-relay:local}
+    build:
+      context: ../relay
+    user: "0:0"
+    read_only: true
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        install -d -m 0700 /var/lib/hermes-talk
+        install -d -o 10001 -g 10001 -m 0700 \
+          /var/lib/hermes-talk/inbox \
+          /var/lib/hermes-talk/outbox \
+          /var/lib/hermes-talk/logs
+        chown 10001:10001 /var/lib/hermes-talk
+    volumes:
+      - relay-data:/var/lib/hermes-talk
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  relay:
+    image: ${RELAY_IMAGE:-hermes-talk-relay:local}
+    build:
+      context: ../relay
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      # Loopback only. The proxy is the single LAN entry point.
+      RELAY_HOST: 127.0.0.1
+      RELAY_PORT: "8790"
+      # Storage roots are pinned to the mounted volume so a host-specific .env
+      # cannot move them outside the container. Paths match .env.example.
+      DATA_DIR: /var/lib/hermes-talk
+      INBOX_DIR: /var/lib/hermes-talk/inbox
+      OUTBOX_DIR: /var/lib/hermes-talk/outbox
+      TOKEN_STATE_PATH: /var/lib/hermes-talk/device_tokens.json
+      # Model paths inside the read-only model mount. Layout is documented in
+      # docs/DEPLOYMENT.md; model weights are never committed to the repo.
+      STT_MODEL_DIR: /models/sherpa-onnx-streaming-zipformer-en-2023-06-26
+      WHISPER_MODEL_DIR: /models/faster-whisper-base
+      TTS_MODEL_PATH: /models/kokoro-v1.0.int8.onnx
+      TTS_VOICES_PATH: /models/voices-v1.0.bin
+    volumes:
+      - relay-data:/var/lib/hermes-talk
+      - ${HERMES_TALK_MODELS:-./models}:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      # Liveness and readiness together: /ready is 503 until settings, storage,
+      # device tokens, and models are all in place, so this stays red on a
+      # half-configured host instead of hiding the problem.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, sys, urllib.error, urllib.request
+
+          def probe(path, expected):
+              try:
+                  with urllib.request.urlopen(
+                      "http://127.0.0.1:8790" + path, timeout=3
+                  ) as response:
+                      return response.status == 200 and json.load(response).get(
+                          "status"
+                      ) == expected
+              except (urllib.error.URLError, OSError, ValueError):
+                  return False
+
+          sys.exit(0 if probe("/health", "ok") and probe("/ready", "ready") else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  proxy:
+    image: caddy:2-alpine
+    depends_on:
+      relay:
+        condition: service_healthy
+    network_mode: host
+    environment:
+      # Site name served with Caddy's internal CA. Must resolve on the clients
+      # (hosts file or LAN DNS); append :port when 443 is taken.
+      RELAY_SITE_ADDRESS: ${RELAY_SITE_ADDRESS:-voice.example.lan}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      # The admin API answers only after the config loaded and the listener is
+      # up; it is bound to loopback inside the container.
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:2019/config/
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

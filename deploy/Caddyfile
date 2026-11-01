@@ -1,0 +1,45 @@
+# Hermes Talk reverse proxy — internal TLS, no ACME, no outbound calls.
+#
+# RELAY_SITE_ADDRESS comes from .env through docker compose (or from the Caddy
+# service environment for a systemd install). The default is a synthetic name:
+# clients must resolve it themselves through a hosts-file entry or a LAN DNS
+# record, so no address is baked into the repository.
+#
+# TLS is issued by Caddy's local CA. Trust it on every device that talks to the
+# relay; the root certificate is exported from the caddy-data volume (see
+# docs/DEPLOYMENT.md, "Reverse proxy and internal TLS").
+{
+	# Admin API stays on loopback; the container healthcheck reads it.
+	admin 127.0.0.1:2019
+	# The container root filesystem is read-only and each client installs the
+	# root certificate by hand, so Caddy must not write the system trust store.
+	skip_install_trust
+}
+
+{$RELAY_SITE_ADDRESS:voice.example.lan} {
+	tls internal
+
+	# SSE run streams and long calls must not be buffered: an immediate flush
+	# keeps partial transcripts and tool events moving, and the upstream header
+	# timeout covers a slow first token from the voice-brain model.
+	reverse_proxy 127.0.0.1:8790 {
+		flush_interval -1
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+
+	# No `encode`: gzip buffering breaks streaming event frames, and the audio
+	# path is already Opus. JSON bodies are small enough to send as-is.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
