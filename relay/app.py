@@ -29,6 +29,7 @@ from starlette.responses import Response
 
 from relay import __version__
 from relay.api.attach import router as attach_router
+from relay.api.files import router as files_router
 from relay.auth.deps import _DeviceAuthError, require_device_token
 from relay.auth.tokens import (
     DeviceToken,
@@ -48,6 +49,7 @@ from relay.logging import (
     set_correlation_id,
 )
 from relay.storage.inbox import InboxConfigError, InboxError, InboxStore
+from relay.storage.outbox import OutboxConfigError, OutboxError, OutboxStore
 
 _CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SERVICE_NAME = "voice-relay"
@@ -329,6 +331,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Keep the shell bootable and /health at 200; uploads return a spoken
         # 503 until INBOX_DIR points at a directory outside the repository.
         app.state.inbox = None
+    try:
+        app.state.outbox = OutboxStore(resolved_settings)
+    except OutboxConfigError:
+        # Keep the shell bootable and /health at 200; artifact requests return a
+        # spoken 503 until OUTBOX_DIR points at a directory outside the repository.
+        app.state.outbox = None
 
     @app.middleware("http")
     async def admission_control_middleware(
@@ -465,7 +473,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers=exc.headers(),
         )
 
+    @app.exception_handler(OutboxError)
+    async def outbox_error_handler(
+        request: Request,
+        exc: OutboxError,
+    ) -> JSONResponse:
+        correlation_id = getattr(request.state, "correlation_id", None)
+        if not isinstance(correlation_id, str) or not correlation_id:
+            correlation_id = uuid.uuid4().hex
+        return JSONResponse(
+            exc.to_body(correlation_id),
+            status_code=exc.status_code,
+            headers=exc.headers(),
+        )
+
     app.include_router(attach_router)
+    app.include_router(files_router)
 
     @app.get("/")
     async def root() -> dict[str, str]:
