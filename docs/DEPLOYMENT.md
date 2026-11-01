@@ -242,3 +242,148 @@ New endpoints must live under the documented prefixes in `RATE_LIMIT_ROUTES` (`/
 `/v1/attachments`, `/v1/artifacts`) to inherit per-device rate limits. Capacity leases for new work
 come from `app.state.limits` (`acquire_session`, `acquire_run`, `acquire_upload`), never from ad-hoc
 counters; the same object supplies the SSE codec, idle guard, reconnect budget, and barge-in gate.
+
+## Data retention and deletion
+
+Retention is opt-in.  The code defaults for every window are `0`, which means
+"keep until an operator deletes it by hand"; nothing is removed unless you set a
+window.  The documented conservative values live in `.env.example`, not in code:
+
+| Variable | Documented value | Effect when set |
+|---|---|---|
+| `INBOX_RETENTION_DAYS` | `30` | Unlink inbox attachments older than 30 days |
+| `OUTBOX_RETENTION_DAYS` | `14` | Remove outbox artifacts older than 14 days |
+| `TRANSCRIPT_RETENTION_DAYS` | `90` | Delete `api_server` Hermes sessions idle for 90 days |
+
+Set them in `.env` (or the service environment) and restart, or override them
+per run with the CLI flags described below.  A negative value is rejected at
+startup; `0` disables pruning for that store.
+
+### What the pruner does
+
+```
+python -m relay.maintenance prune [--dry-run] [--json]
+```
+
+Per-run overrides: `--inbox-days`, `--outbox-days`, `--transcript-days`,
+`--inbox-dir`, `--outbox-dir`, and `--now` (ISO 8601, for replays).  These flags
+win over the environment for that run only.
+
+- **Inbox** (`$INBOX_DIR`): walks the root without following symlinks and
+  unlinks regular files whose mtime is at or past `INBOX_RETENTION_DAYS`.
+  Crash leftovers such as `.incoming-*.part` are ordinary candidates.  A file
+  claimed by a running turn is skipped (`reason=in_use`).
+- **Outbox** (`$OUTBOX_DIR`): the same age rule for artifacts in nested
+  directories.  Symlinks are neither followed nor deleted, so a link to a file
+  outside the root leaves its target untouched.
+- **Transcripts**: lists sessions from the loopback Hermes API
+  (`GET /api/sessions?source=api_server`) and deletes expired rows with
+  `DELETE /api/sessions/{id}`.  The Hermes session database is never written
+  directly.  Only rows whose `source` is exactly `api_server` are eligible;
+  Telegram, CLI, and Kanban sessions belong to other surfaces and are left
+  alone.
+
+Roots that resolve inside the repository are refused: the pruner records an
+error and deletes nothing inside the checkout.
+
+Run the command from the repository root (`cd /opt/hermes-talk`), not from
+inside `relay/`: a directory named `logging` on `sys.path` shadows the standard
+library module of the same name.  The container image has the same problem with
+its `WORKDIR /app`, so run the pruner there with `-w /`:
+
+```
+docker run --rm -w / --env-file /etc/hermes-talk/relay.env <image> python -m relay.maintenance prune
+```
+
+### Active-call safety
+
+A turn that hands an inbox attachment to the agent holds a cross-process claim
+with `ReferenceGuard` for the whole turn.  The pruner uses the same
+`<root>/.locks` claims: an expired file that is currently claimed is skipped
+and retried on the next run.  A file is unlinked only while the pruner holds the
+exclusive lock, so a turn cannot start reading a file mid-deletion.  Hermes
+answers `409 session_active_turn` for a session with a running turn; the pruner
+records `reason=active_turn` and leaves it for the next run.
+
+### Idempotency, dry runs, and exit codes
+
+Pruning is idempotent: a second run over the same tree deletes nothing and
+emits no new `retention.deleted` entries.  `--dry-run` performs no unlink and
+issues no `DELETE` calls, but still reports the planned items.  The process
+exits `0` when no error was recorded and `1` when any error was recorded (a dry
+run follows the same rule).  Use `--json` for a machine-readable report; the
+default output is a human summary that never contains absolute paths.
+
+### Audit trail
+
+Every deletion is appended to `$DATA_DIR/audit.log` (mode `0600`):
+
+- `retention.deleted` — `kind`, relative `path` or `session_id`, `age_days`,
+  `reason`, and `size_bytes` for files only;
+- `retention.skipped` — `kind`, relative `path` or `session_id`, `age_days`,
+  `reason`;
+- `retention.error` — `kind`, relative `path` or `session_id`, `error`;
+- `retention.summary` — counts, `dry_run`, and `stale_locks_removed`.
+
+Audit entries carry paths relative to the pruned root, ages, sizes, and ids.
+They never contain file contents, transcript text, or absolute home paths.
+
+### Scheduling
+
+A cron example (source the relay environment so `$DATA_DIR` is set):
+
+```
+# /etc/cron.d/hermes-talk-retention
+15 3 * * * relay sh -c 'set -a; . /etc/hermes-talk/relay.env; set +a; cd /opt/hermes-talk && .venv/bin/python -m relay.maintenance prune >> "${DATA_DIR:-/var/lib/hermes-talk}/logs/retention.log" 2>&1'
+```
+
+`configure_logging` creates `${DATA_DIR:-/var/lib/hermes-talk}/logs` once the
+relay has run at least once, so the redirect target exists for the cron job.
+
+The equivalent systemd units (documented here, not installed by the project):
+
+```
+# /etc/systemd/system/hermes-talk-retention.service
+[Unit]
+Description=Hermes Talk data retention
+After=network.target
+
+[Service]
+Type=oneshot
+User=relay
+EnvironmentFile=/etc/hermes-talk/relay.env
+WorkingDirectory=/opt/hermes-talk
+ExecStart=/opt/hermes-talk/.venv/bin/python -m relay.maintenance prune
+```
+
+```
+# /etc/systemd/system/hermes-talk-retention.timer
+[Unit]
+Description=Nightly Hermes Talk data retention
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable with `systemctl enable --now hermes-talk-retention.timer`.
+
+### Manual deletion
+
+While the relay is idle, remove files directly inside `$INBOX_DIR` or
+`$OUTBOX_DIR` with `rm`.  Delete a transcript only through the API, never by
+editing the Hermes database:
+
+```
+curl -X DELETE -H "Authorization: Bearer $HERMES_API_KEY" \
+  http://127.0.0.1:8642/api/sessions/<session-id>
+```
+
+Manual deletions are permanent and are **not** written to the audit trail:
+only the automated pruner appends `retention.*` entries.
+
+`python -m relay.maintenance prune` is offline apart from the loopback Hermes
+session call; inbox and outbox pruning touch only the local filesystem.

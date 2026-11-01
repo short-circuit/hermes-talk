@@ -84,3 +84,12 @@ gitleaks git --log-opts=--all --redact   # full-history secret scan
 
 Test fixtures use synthetic data only; never commit a real transcript, a personal photo, or a real
 address.
+
+## Retention
+
+Lifetimes are configurable per store and disabled by default (`0` keeps data
+until manual deletion).  The documented conservative values live in
+`.env.example`; see `docs/DEPLOYMENT.md` § "Data retention and deletion" for the
+windows, the pruner, and the scheduling examples.  Automated deletions are
+written to the append-only audit trail with a relative path or session id, the
+age, and the reason — never file contents or transcript text.

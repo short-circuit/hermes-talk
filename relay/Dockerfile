@@ -17,6 +17,7 @@ COPY brain ./brain/
 COPY storage ./storage/
 COPY api ./api/
 COPY speech ./speech/
+COPY maintenance ./maintenance/
 
 RUN pip install --no-cache-dir .
 

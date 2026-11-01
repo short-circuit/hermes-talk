@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     speech_max_buffer_bytes: int = 480000
     speech_max_buffer_frames: int = 250
     speech_backpressure_timeout_s: float = 2.0
+    inbox_retention_days: int = 0
+    outbox_retention_days: int = 0
+    transcript_retention_days: int = 0
 
     @field_validator("relay_port")
     @classmethod
@@ -368,6 +371,18 @@ class Settings(BaseSettings):
     def _validate_speech_backpressure_timeout(cls, value: float) -> float:
         if not math.isfinite(value) or value < 0:
             msg = "speech_backpressure_timeout_s must be finite and zero or greater"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "inbox_retention_days",
+        "outbox_retention_days",
+        "transcript_retention_days",
+    )
+    @classmethod
+    def _validate_retention_days(cls, value: int) -> int:
+        if value < 0:
+            msg = "retention days must be zero or greater (0 keeps data until manual delete)"
             raise ValueError(msg)
         return value
 
