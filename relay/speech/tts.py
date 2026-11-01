@@ -47,6 +47,8 @@ _ABBREVIATIONS = frozenset(
 )
 _TOKEN_RE = re.compile(r"(\S+)$")
 _MIN_SEGMENT_CHARS = 2
+_MIN_FIRST_SEGMENT_CHARS = 4
+_MAX_FIRST_SEGMENT_CHARS = 400
 _KOKORO_SAMPLE_RATE = 24000
 _TTS_QUEUE_NAME = "tts_sentence_queue"
 
@@ -72,6 +74,7 @@ class SentenceSplitter:
         *,
         clause_split_chars: int = 80,
         max_segment_chars: int = 160,
+        first_segment_max_chars: int = 20,
     ) -> None:
         if clause_split_chars < _MIN_SEGMENT_CHARS:
             msg = "clause_split_chars must be at least two"
@@ -79,8 +82,16 @@ class SentenceSplitter:
         if max_segment_chars < clause_split_chars:
             msg = "max_segment_chars must be at least clause_split_chars"
             raise ValueError(msg)
+        if not _MIN_FIRST_SEGMENT_CHARS <= first_segment_max_chars <= _MAX_FIRST_SEGMENT_CHARS:
+            msg = (
+                "first_segment_max_chars must be between "
+                f"{_MIN_FIRST_SEGMENT_CHARS} and {_MAX_FIRST_SEGMENT_CHARS}"
+            )
+            raise ValueError(msg)
         self._clause_split_chars = clause_split_chars
         self._max_segment_chars = max_segment_chars
+        self._first_segment_max_chars = first_segment_max_chars
+        self._first_segment_emitted = False
         self._buffer = ""
 
     @property
@@ -111,6 +122,36 @@ class SentenceSplitter:
         if len(remaining) >= _MIN_SEGMENT_CHARS:
             segments.append(remaining)
         return segments
+
+    def _cap_first_segment(self, segment: str) -> tuple[str, str]:
+        """Split a first segment at the last word boundary inside the cap."""
+        cap = self._first_segment_max_chars
+        if len(segment) <= cap:
+            return segment, ""
+        cut = segment.rfind(" ", 0, cap + 1)
+        if cut < _MIN_SEGMENT_CHARS:
+            cut = cap
+        prefix = segment[:cut].strip()
+        remainder = segment[cut:].strip()
+        return prefix, remainder
+
+    def _emit(self, segments: list[str]) -> tuple[list[str], bool]:
+        """Emit segments, applying the first-segment cap once per stream.
+
+        When the first segment is capped, its remainder and any later segments
+        are put back at the front of the buffer so the caller can emit the
+        short prefix immediately and keep the rest for the next drain.
+        """
+        if not segments or self._first_segment_emitted:
+            return segments, False
+        self._first_segment_emitted = True
+        prefix, remainder = self._cap_first_segment(segments[0])
+        if not remainder:
+            return segments, False
+        rest = [remainder, *segments[1:]]
+        tail = " ".join(rest)
+        self._buffer = f"{tail} {self._buffer}".strip() if self._buffer else tail
+        return ([prefix] if prefix else []), True
 
     def _find_boundary(self) -> int | None:
         for index, char in enumerate(self._buffer):
@@ -145,19 +186,28 @@ class SentenceSplitter:
             if marker_index is not None and (boundary is None or marker_index < boundary):
                 segment = self._consume(marker_index + 1)
                 if len(segment) >= _MIN_SEGMENT_CHARS:
-                    emitted.extend(self._split_capped(segment))
+                    new_segments, capped = self._emit(self._split_capped(segment))
+                    emitted.extend(new_segments)
+                    if capped:
+                        return emitted
                 continue
 
             if boundary is not None:
                 if self._buffer[boundary] == "\n":
                     segment = self._consume(boundary)
                     if segment:
-                        emitted.extend(self._split_capped(segment))
+                        new_segments, capped = self._emit(self._split_capped(segment))
+                        emitted.extend(new_segments)
+                        if capped:
+                            return emitted
                     self._buffer = self._buffer.lstrip("\n").lstrip()
                     continue
                 segment = self._consume(boundary + 1)
                 if segment:
-                    emitted.extend(self._split_capped(segment))
+                    new_segments, capped = self._emit(self._split_capped(segment))
+                    emitted.extend(new_segments)
+                    if capped:
+                        return emitted
                 continue
 
             if len(self._buffer) > self._max_segment_chars:
@@ -166,7 +216,10 @@ class SentenceSplitter:
                     cut = self._max_segment_chars
                 segment = self._consume(cut)
                 if len(segment) >= _MIN_SEGMENT_CHARS:
-                    emitted.extend(self._split_capped(segment))
+                    new_segments, capped = self._emit(self._split_capped(segment))
+                    emitted.extend(new_segments)
+                    if capped:
+                        return emitted
                 continue
 
             break
@@ -185,11 +238,21 @@ class SentenceSplitter:
         self._buffer = ""
         if not remainder:
             return []
-        return self._split_capped(remainder)
+        segments = self._split_capped(remainder)
+        if self._first_segment_emitted or not segments:
+            return segments
+        self._first_segment_emitted = True
+        prefix, rest = self._cap_first_segment(segments[0])
+        emitted = [prefix] if prefix else []
+        if rest:
+            emitted.append(rest)
+        emitted.extend(segments[1:])
+        return emitted
 
     def reset(self) -> None:
-        """Drop any buffered text."""
+        """Drop any buffered text and re-arm the first-segment cap."""
         self._buffer = ""
+        self._first_segment_emitted = False
 
 
 @dataclass(frozen=True)
@@ -308,6 +371,7 @@ class StreamingTts:
         opus_bit_rate: int = 32000,
         max_pending_sentences: int = 3,
         backpressure_timeout_s: float = 2.0,
+        first_segment_max_chars: int = 20,
         limits: BufferLimits | None = None,
     ) -> None:
         if max_pending_sentences < 1:
@@ -319,6 +383,12 @@ class StreamingTts:
         if opus_bit_rate <= 0:
             msg = "opus_bit_rate must be greater than zero"
             raise ValueError(msg)
+        if not _MIN_FIRST_SEGMENT_CHARS <= first_segment_max_chars <= _MAX_FIRST_SEGMENT_CHARS:
+            msg = (
+                "first_segment_max_chars must be between "
+                f"{_MIN_FIRST_SEGMENT_CHARS} and {_MAX_FIRST_SEGMENT_CHARS}"
+            )
+            raise ValueError(msg)
 
         self._engine = engine
         self._voice = voice
@@ -326,12 +396,13 @@ class StreamingTts:
         self._opus_bit_rate = opus_bit_rate
         self._max_pending_sentences = max_pending_sentences
         self._backpressure_timeout_s = backpressure_timeout_s
+        self._first_segment_max_chars = first_segment_max_chars
         self._limits = limits or BufferLimits(
             max_bytes=480000,
             max_frames=250,
             name="tts_audio",
         )
-        self._splitter = SentenceSplitter()
+        self._splitter = SentenceSplitter(first_segment_max_chars=first_segment_max_chars)
         self._sentences: asyncio.Queue[tuple[str, float, int, int]] = asyncio.Queue(
             maxsize=max_pending_sentences
         )
@@ -591,6 +662,16 @@ class StreamingTts:
         """Return the live metrics object for this stream."""
         return self._metrics
 
+    def describe(self) -> dict[str, object]:
+        """Return the configured streaming parameters for diagnostics."""
+        return {
+            "voice": self._voice,
+            "speed": self._speed,
+            "opus_bit_rate": self._opus_bit_rate,
+            "max_pending_sentences": self._max_pending_sentences,
+            "first_segment_max_chars": self._first_segment_max_chars,
+        }
+
 
 def create_tts(settings: Any) -> StreamingTts:
     """Build the configured streaming TTS pipeline."""
@@ -611,5 +692,6 @@ def create_tts(settings: Any) -> StreamingTts:
         opus_bit_rate=settings.opus_bit_rate,
         max_pending_sentences=settings.tts_max_pending_sentences,
         backpressure_timeout_s=settings.speech_backpressure_timeout_s,
+        first_segment_max_chars=settings.tts_first_segment_max_chars,
         limits=limits,
     )

@@ -100,7 +100,7 @@ def test_splitter_flush_returns_unpunctuated_text() -> None:
 
 
 def test_splitter_emits_leading_clause_for_long_comma_text() -> None:
-    splitter = SentenceSplitter(clause_split_chars=80)
+    splitter = SentenceSplitter(clause_split_chars=80, first_segment_max_chars=400)
     text = "alpha " * 20 + "beta, gamma delta."
     segments = splitter.push(text)
     assert segments
@@ -111,10 +111,67 @@ def test_splitter_emits_leading_clause_for_long_comma_text() -> None:
 
 
 def test_splitter_caps_long_segments() -> None:
-    splitter = SentenceSplitter(max_segment_chars=160)
+    splitter = SentenceSplitter(max_segment_chars=160, first_segment_max_chars=400)
     segments = splitter.push("word " * 50 + "end.")
     assert segments
     assert all(len(segment) <= 160 for segment in segments)
+
+
+def test_splitter_caps_first_segment_at_word_boundary() -> None:
+    splitter = SentenceSplitter(first_segment_max_chars=20)
+    text = "alpha beta gamma delta epsilon zeta."
+    assert splitter.push(text) == ["alpha beta gamma"]
+    assert splitter.flush() == ["delta epsilon zeta."]
+
+
+def test_splitter_leaves_short_first_segment_untouched() -> None:
+    splitter = SentenceSplitter(first_segment_max_chars=20)
+    assert splitter.push("Hello there.") == ["Hello there."]
+
+
+def test_splitter_first_segment_cap_does_not_apply_to_later_segments() -> None:
+    splitter = SentenceSplitter(first_segment_max_chars=20)
+    text = "Hi. alpha beta gamma delta epsilon zeta."
+    assert splitter.push(text) == ["Hi.", "alpha beta gamma delta epsilon zeta."]
+
+
+def test_splitter_reset_rearms_first_segment_cap() -> None:
+    splitter = SentenceSplitter(first_segment_max_chars=20)
+    assert splitter.push("Hi.") == ["Hi."]
+    splitter.reset()
+    assert splitter.push("alpha beta gamma delta epsilon zeta.") == ["alpha beta gamma"]
+
+
+@pytest.mark.parametrize("value", [3, 401])
+def test_splitter_rejects_invalid_first_segment_cap(value: int) -> None:
+    with pytest.raises(ValueError, match="first_segment_max_chars"):
+        SentenceSplitter(first_segment_max_chars=value)
+
+
+def test_streaming_tts_applies_first_segment_cap() -> None:
+    async def scenario() -> None:
+        tts = StreamingTts(
+            FakeEngine(),
+            first_segment_max_chars=20,
+            backpressure_timeout_s=1.0,
+        )
+        await tts.push_text("alpha beta gamma delta epsilon zeta.")
+        await tts.flush()
+        chunks = await asyncio.wait_for(_collect(tts), 2.0)
+        assert len(chunks) >= 2
+        assert len(chunks[0].text) <= 20
+        joined = " ".join(chunk.text for chunk in chunks)
+        assert joined.split() == [
+            "alpha",
+            "beta",
+            "gamma",
+            "delta",
+            "epsilon",
+            "zeta.",
+        ]
+        await tts.close()
+
+    asyncio.run(scenario())
 
 
 def test_splitter_ignores_empty_deltas() -> None:

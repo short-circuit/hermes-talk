@@ -1,0 +1,12 @@
+[
+  "Let me check the build logs and tell you what failed on the last run before I give you the summary.",
+  "I am going to look through the deployment notes and compare them with the release checklist before I answer your question about the rollback.",
+  "Before I summarize the test results, let me verify the integration run that finished overnight and check whether any of the flaky cases failed again.",
+  "I want to walk through the incident timeline and confirm the exact moment the alert fired so the summary I give you is accurate and complete.",
+  "Let me pull the latest metrics from the dashboard and compare them against yesterday so I can explain the change in latency before you decide.",
+  "I am checking the queue depth and the worker health right now, and I will tell you whether the backlog is clearing or still growing.",
+  "Before I answer, I need to read the configuration file and verify that the new timeout values match the ones we agreed on in the review.",
+  "Let me inspect the storage usage and the retention settings, then I will summarize how much space the recordings are taking and what we can reclaim.",
+  "I am going to trace the request through the relay and check each hop for errors, so I can tell you where the delay was introduced.",
+  "Before I give you the final answer, let me review the last three deploys and confirm which one changed the service configuration and caused the warning."
+]

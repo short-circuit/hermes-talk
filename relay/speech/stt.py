@@ -177,6 +177,13 @@ class _SherpaSession:
         self._last_partial_text = ""
         self._last_partial_at = -math.inf
 
+    def _decode_flush(self) -> tuple[str, bool]:
+        padding_ms = self._adapter.flush_padding_ms
+        if padding_ms <= 0:
+            return self._decode_pending()
+        padding_samples = int(_STT_SAMPLE_RATE * padding_ms / 1000.0)
+        return self._decode(bytes(padding_samples * 2), _STT_SAMPLE_RATE)
+
     async def feed(self, chunk: PcmChunk) -> tuple[TranscriptEvent, ...]:
         self._ensure_open()
         chunk.validate()
@@ -246,7 +253,7 @@ class _SherpaSession:
         self._ensure_open()
         started = _monotonic()
         async with self._lock:
-            text, endpoint = await asyncio.to_thread(self._decode_pending)
+            text, endpoint = await asyncio.to_thread(self._decode_flush)
             latency_ms = (_monotonic() - started) * 1000.0
             normalized = _normalize_text(text)
             audio_ms = self._audio_ms
@@ -267,7 +274,16 @@ class _SherpaSession:
 
 
 class SherpaStreamingStt:
-    """Streaming sherpa-onnx transducer adapter (16 kHz mono PCM16 input)."""
+    """Streaming sherpa-onnx transducer adapter (16 kHz mono PCM16 input).
+
+    ``flush_padding_ms`` is synthetic trailing silence fed to the chunk-based
+    decoder so that :meth:`flush` returns the complete final transcript.  The
+    chunk-based zipformer decoder lags the input by one to three chunks, so a
+    flush without padding truncates the last words.  The padding costs decode
+    time only (about 25 ms for 480 ms of padding at RTF ≈ 0.03), not real audio
+    time.  Set it to 0 to disable padding; the flush transcript may then be
+    truncated.
+    """
 
     name = "sherpa"
 
@@ -280,6 +296,7 @@ class SherpaStreamingStt:
         partial_interval_ms: int = 120,
         rule2_min_trailing_silence: float = 0.8,
         resample_input: bool = True,
+        flush_padding_ms: int = 480,
     ) -> None:
         if num_threads < 1:
             msg = "num_threads must be at least one"
@@ -290,6 +307,9 @@ class SherpaStreamingStt:
         if rule2_min_trailing_silence < 0:
             msg = "rule2_min_trailing_silence must be zero or greater"
             raise ValueError(msg)
+        if not 0 <= flush_padding_ms <= 1000:
+            msg = "flush_padding_ms must be between 0 and 1000"
+            raise ValueError(msg)
 
         tokens, encoder, decoder, joiner = _resolve_sherpa_model(model_dir)
         self.model_dir = Path(model_dir).expanduser()  # type: ignore[arg-type]
@@ -298,6 +318,7 @@ class SherpaStreamingStt:
         self.partial_interval_ms = partial_interval_ms
         self.rule2_min_trailing_silence = rule2_min_trailing_silence
         self.resample_input = resample_input
+        self.flush_padding_ms = flush_padding_ms
         self._tokens = tokens
         self._encoder = encoder
         self._decoder = decoder
@@ -333,6 +354,7 @@ class SherpaStreamingStt:
             "num_threads": self.num_threads,
             "provider": self.provider,
             "partial_interval_ms": self.partial_interval_ms,
+            "flush_padding_ms": self.flush_padding_ms,
             "streaming": True,
         }
 
@@ -384,7 +406,9 @@ class _WhisperSession:
         texts: list[str] = []
         for segment in segments:
             text = str(getattr(segment, "text", "")).strip()
-            if text:
+            # Whisper emits punctuation-only segments at chunk edges; they are
+            # noise for a caller that speaks the transcript back.
+            if text and any(char.isalnum() for char in text):
                 texts.append(text)
         return texts
 
@@ -514,6 +538,7 @@ def create_stt(settings: Any) -> SttAdapter:
             settings.stt_model_dir,
             num_threads=settings.stt_num_threads,
             partial_interval_ms=settings.stt_partial_interval_ms,
+            flush_padding_ms=settings.stt_flush_padding_ms,
         )
     if engine == "whisper":
         return WhisperFallbackStt(

@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     stt_model_dir: Path | None = None
     stt_num_threads: int = 4
     stt_partial_interval_ms: int = 120
+    stt_flush_padding_ms: int = 480
     whisper_model_dir: Path | None = None
     whisper_chunk_ms: int = 2000
     tts_engine: str = "kokoro"
@@ -94,6 +95,7 @@ class Settings(BaseSettings):
     tts_voice: str = "af_sarah"
     tts_speed: float = 1.0
     tts_max_pending_sentences: int = 3
+    tts_first_segment_max_chars: int = 20
     opus_bit_rate: int = 32000
     speech_max_buffer_bytes: int = 480000
     speech_max_buffer_frames: int = 250
@@ -305,6 +307,14 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("stt_flush_padding_ms")
+    @classmethod
+    def _validate_stt_flush_padding(cls, value: int) -> int:
+        if not 0 <= value <= 1000:
+            msg = "stt_flush_padding_ms must be between 0 and 1000"
+            raise ValueError(msg)
+        return value
+
     @field_validator("whisper_chunk_ms")
     @classmethod
     def _validate_whisper_chunk_ms(cls, value: int) -> int:
@@ -326,6 +336,14 @@ class Settings(BaseSettings):
     def _validate_tts_max_pending_sentences(cls, value: int) -> int:
         if not 1 <= value <= 16:
             msg = "tts_max_pending_sentences must be between 1 and 16"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("tts_first_segment_max_chars")
+    @classmethod
+    def _validate_tts_first_segment_max_chars(cls, value: int) -> int:
+        if not 4 <= value <= 400:
+            msg = "tts_first_segment_max_chars must be between 4 and 400"
             raise ValueError(msg)
         return value
 

@@ -61,11 +61,12 @@ def test_real_sherpa_streaming_transcript_latency() -> None:
         pytest.skip("test_wavs/0.wav is not present in the speech model directory")
     sample_rate, pcm = _read_wav(wav_path)
 
-    async def scenario() -> list[object]:
+    async def scenario() -> tuple[list[object], object | None]:
         adapter = SherpaStreamingStt(model_dir)
         session = await adapter.start_session()
         events: list[object] = []
         frame_bytes = int(sample_rate * _FRAME_MS / 1000) * 2
+        flush_final: object | None = None
         try:
             for offset in range(0, len(pcm), frame_bytes):
                 chunk = PcmChunk(
@@ -74,20 +75,26 @@ def test_real_sherpa_streaming_transcript_latency() -> None:
                 )
                 if chunk.data:
                     events.extend(await session.feed(chunk))
-            final = await session.flush()
-            if final is not None:
-                events.append(final)
+            flush_final = await session.flush()
+            if flush_final is not None:
+                events.append(flush_final)
         finally:
             await session.close()
-        return events
+        return events, flush_final
 
-    events = asyncio.run(scenario())
+    events, flush_final = asyncio.run(scenario())
     finals = [event for event in events if event.kind == "final"]
     assert finals, "expected at least one final transcript"
     transcript = " ".join(event.text for event in finals)
     assert any(character.isalpha() for character in transcript)
     assert len(transcript.split()) >= 3
     assert all(event.latency_ms < 300 for event in finals)
+    assert flush_final is not None
+    assert flush_final.kind == "final"
+    assert flush_final.text
+    last_word = flush_final.text.lower().split()[-1].strip(".,!?;:")
+    assert last_word == "brothels"
+    assert flush_final.latency_ms < 300
 
 
 def test_real_kokoro_first_audio_latency() -> None:
