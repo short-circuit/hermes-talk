@@ -404,20 +404,45 @@ restoring the backup taken in step 1 of the upgrade; otherwise the relay starts 
 
 ### Rehearsal record
 
-The procedure above was rehearsed on 2026-11-01 on a clean copy of this repository (a `git archive` of
-`HEAD` in a scratch directory, no working tree, no prior containers), with an `.env` derived from
-`.env.example` and an empty model directory:
+Rehearsed on 2026-11-01 from a clean copy of this repository: `git archive` of commit `1abc5d0` into
+an empty directory (no `.git`, no working tree, no prior containers), with an `.env` derived from
+`.env.example` and an empty model directory. Port 443 on the rehearsal host was held by another
+service, so the site address was `voice.example.lan:8443` — the documented escape hatch — instead of
+the default 443.
 
-1. `docker compose up -d --build` with `RELAY_IMAGE=hermes-talk-relay:<head-sha>` — relay `healthy`,
-   `/health` 200, `/ready` 200, proxy serving `https://voice.example.lan/health` 200 with the exported
-   internal CA.
-2. `docker compose stop relay proxy`, then `RELAY_IMAGE=hermes-talk-relay:<previous-sha> docker compose up
-   -d --no-build` — the previous image came up `healthy` on the same data volume, with the token state
-   file and audit log still present.
-3. Roll forward to `<head-sha>` with the same commands — `healthy` again.
+1. `docker compose up -d --build` with `RELAY_IMAGE=hermes-talk-relay:1abc5d0`: `volume-init` exited
+   0, relay `healthy`, proxy `healthy`. Listeners were `127.0.0.1:8790` (relay) and `*:8443` (proxy)
+   only. `/health` 200 and `/ready` 200 with every check green (`settings`, `storage`, `auth`,
+   `models`, `shutdown`, `limits`).
+2. TLS: `docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt`, then
+   `curl --cacert ./caddy-root.crt --resolve voice.example.lan:8443:127.0.0.1
+   https://voice.example.lan:8443/health` -> 200, certificate issued by `CN=Caddy Local Authority -
+   ECC Intermediate` for `voice.example.lan`. `/v1/artifacts` returned 401 without a token and 200
+   with the token issued through `docker compose exec relay python -m relay.tokens issue --label
+   rehearsal-phone`.
+3. Rollback: `docker compose stop relay proxy`, then
+   `RELAY_IMAGE=hermes-talk-relay:e26f7e1 docker compose up -d --no-build` — the previous release came
+   up `healthy` on the same data volume, `/ready` 200 reporting `1 active device token(s)`,
+   `/v1/artifacts` 200 with the token issued before the rollback, and `audit.log`, `relay.log` and
+   `device_tokens.json` still present.
+4. Roll forward: `RELAY_IMAGE=hermes-talk-relay:1abc5d0 docker compose up -d --no-build` — `healthy`
+   again, the same checks green.
+5. `docker compose down` — containers and network removed, the three named volumes kept.
 
-The rehearsal tore the stack down afterwards (`docker compose down`, volumes kept). Nothing on the host
-was restarted: the stack was created, exercised, and removed.
+Two defects surfaced and were fixed in this commit:
+
+- The image did not build at all: `relay/Dockerfile` never copied `transport/`, which
+  `pyproject.toml` declares as a package, so `pip install .` failed with `package directory
+  './transport' does not exist`. The previous release (`e26f7e1`) is affected, so the rollback
+  rehearsal rebuilt its image from the same source with the current Dockerfile.
+- `WORKDIR /app` put the repository's `logging/` package ahead of the standard library on `sys.path`
+  for `python -c` and `python -m`, which broke the container healthcheck and `python -m
+  relay.tokens`; `PYTHONSAFEPATH=1` fixes both. The image `CMD` also hard-coded `--host 0.0.0.0` and
+  so ignored `RELAY_HOST`; it now runs `python -m relay.app`, which makes the loopback bind a
+  configuration fact rather than an argument.
+
+The rehearsal tore the stack down afterwards. Nothing on the host was restarted: the stack was
+created, exercised, and removed.
 
 ## Troubleshooting
 
