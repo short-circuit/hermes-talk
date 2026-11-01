@@ -13,6 +13,7 @@ COPY pyproject.toml README.md ./
 COPY __init__.py config.py app.py limits.py tokens.py ./
 COPY logging ./logging/
 COPY auth ./auth/
+COPY brain ./brain/
 COPY storage ./storage/
 COPY api ./api/
 COPY speech ./speech/

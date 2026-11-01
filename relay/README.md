@@ -20,6 +20,7 @@ relay/
     audio.py        # optional WAV debug recording and log-safe summaries
   auth/             # device tokens, hash-at-rest store, FastAPI auth dependency
   storage/          # attachment inbox: sniffing, atomic storage, delegation parts
+  brain/            # prompts, provenance envelopes, approval gate, narration
   api/              # HTTP routers (attachment upload)
   tests/            # in-process ASGI tests
   pyproject.toml    # package metadata and tooling config
@@ -70,3 +71,11 @@ Stored files use server-generated names, are written atomically, and carry a SHA
 bytes plus the detected MIME type. Before an attachment is delegated, the relay re-hashes the stored
 file and refuses to use it if the bytes changed. Documents are handed to Hermes as absolute paths in
 the run's text content, while images within 8 MiB are additionally inlined as `image_url` data URLs.
+
+## Prompt-injection containment
+
+Untrusted attachment text and tool output are wrapped in provenance envelopes carrying the source
+name, SHA-256, and a nonce, and the system preamble states that everything inside an envelope is
+data, never instructions. Documents are handed over as a path plus a hash; an inlined excerpt is
+truncated with an explicit marker. The spoken approval gate is the only approver, and tool narration
+reads a mapped phrase with a bounded excerpt rather than raw output.
