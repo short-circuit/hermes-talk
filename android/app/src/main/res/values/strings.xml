@@ -1,0 +1,54 @@
+<resources>
+    <string name="app_name">Hermes Talk</string>
+    <string name="settings_screen_title">Settings</string>
+    <string name="connection_screen_title">Connection</string>
+
+    <string name="relay_url_label">Relay URL</string>
+    <string name="relay_url_example">Example: http://127.0.0.1:8790</string>
+    <string name="device_token_label">Device token</string>
+    <string name="device_token_hint">Paste the device token from the relay</string>
+    <string name="show_token">Show token</string>
+    <string name="hide_token">Hide token</string>
+    <string name="save">Save</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="retry">Retry</string>
+    <string name="back">Back</string>
+
+    <string name="token_saved">Device token saved</string>
+    <string name="token_not_saved">Device token not saved</string>
+    <string name="cleartext_notice">Plain HTTP — TLS pinning lands in a follow-up card</string>
+    <string name="mic_denied_notice">Microphone permission denied — connecting without microphone input</string>
+
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_ready">Ready</string>
+    <string name="status_reconnecting">Reconnecting…</string>
+    <string name="status_failed">Failed</string>
+
+    <string name="headline_disconnected">Disconnected from relay</string>
+    <string name="headline_connecting">Connecting to relay</string>
+    <string name="headline_connected">Connected to relay</string>
+    <string name="headline_ready">Relay is ready</string>
+    <string name="headline_reconnecting">Reconnecting to relay</string>
+    <string name="headline_failed">Connection failed</string>
+
+    <string name="relay_host_label">Relay host</string>
+    <string name="relay_host_value">Relay host: %1$s</string>
+    <string name="not_configured">Not configured</string>
+    <string name="retryable_hint">This failure can be retried</string>
+
+    <string name="event_log_title">Recent events</string>
+    <string name="no_events">No events yet</string>
+
+    <string name="error_reason_unreachable">Relay unreachable</string>
+    <string name="error_reason_unauthorized">Unauthorized</string>
+    <string name="error_reason_not_ready">Relay not ready</string>
+    <string name="error_reason_handshake_failed">Handshake failed</string>
+    <string name="error_reason_permission_denied">Permission denied</string>
+    <string name="error_reason_backend_error">Relay error</string>
+    <string name="error_reason_transport_closed">Connection closed</string>
+    <string name="error_reason_invalid_configuration">Invalid configuration</string>
+    <string name="error_reason_unexpected">Unexpected error</string>
+</resources>

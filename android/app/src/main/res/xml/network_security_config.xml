@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Version 1 accepts plain HTTP so the app can talk to a loopback relay and
+    an adb-reversed USB device without certificate setup. The TLS/pinning
+    follow-up card will tighten this to HTTPS-only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
