@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from relay.config import Settings
+from relay.storage import validation
 from relay.storage.inbox import (
     ALLOWED_TYPES,
     INLINE_IMAGE_MAX_BYTES,
@@ -38,11 +39,12 @@ from relay.storage.inbox import (
     sanitize_filename,
     sniff_mime,
 )
+from relay.tests import media_fixtures
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _JPEG_MAGIC = b"\xff\xd8\xff\xe0"
 _GIF_MAGIC = b"GIF89a"
-_PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+_PDF_BYTES = media_fixtures.build_pdf()
 _WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24
 _TEXT_BYTES = b"hello from the relay\n"
 _MB = 1024 * 1024
@@ -124,6 +126,7 @@ class RepeatingStream:
         (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
         (_GIF_MAGIC, "image/gif"),
         (_PDF_BYTES, "application/pdf"),
+        (b"PK\x03\x04\x14\x00\x00\x00", "application/zip"),
         (_WAV_BYTES, "audio/wav"),
         (b"ID3\x04\x00\x00\x00\x00", "audio/mpeg"),
         (b"\xff\xfb\x90\x00", "audio/mpeg"),
@@ -144,7 +147,6 @@ def test_sniff_accepts_allowlisted_magic(head: bytes, expected: str) -> None:
     [
         b"",
         b"MZ\x90\x00\x03\x00\x00\x00",
-        b"PK\x03\x04\x14\x00\x00\x00",
         b"\x00\x01\x02\x03\xff\xfe",
     ],
 )
@@ -191,6 +193,7 @@ def test_canonical_extensions_are_allowlisted() -> None:
         assert canonical_extension(mime).startswith(".")
     assert canonical_extension("image/jpeg") == ".jpg"
     assert canonical_extension("text/plain") == ".txt"
+    assert canonical_extension("application/zip") == ".zip"
 
 
 @pytest.mark.parametrize(
@@ -508,7 +511,10 @@ def test_delegation_parts_missing_file_raises(tmp_path: Path) -> None:
 def test_constants_match_specification() -> None:
     assert MAX_SNIFF_BYTES == 4096
     assert INLINE_IMAGE_MAX_BYTES == 8 * 1024 * 1024
-    assert Image.MAX_IMAGE_PIXELS == 89_478_485
+    assert validation.DEFAULT_LIMITS.max_image_pixels == 40_000_000
+    assert validation.DEFAULT_LIMITS.max_pdf_pages == 200
+    assert validation.DEFAULT_LIMITS.max_archive_entries == 512
+    assert validation.DEFAULT_LIMITS.parse_timeout_seconds == 10.0
 
 
 def test_ingest_gif_is_copied_through_unchanged(tmp_path: Path) -> None:

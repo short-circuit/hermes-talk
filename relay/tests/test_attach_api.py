@@ -17,9 +17,10 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from relay.storage.inbox import InboxStore
+from relay.tests import media_fixtures
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+_PDF_BYTES = media_fixtures.build_pdf()
 _WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24
 _TEXT_BYTES = b"hello from the relay\n"
 _AUTH = {"Authorization": "Bearer test-token"}

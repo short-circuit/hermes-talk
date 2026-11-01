@@ -38,6 +38,7 @@ _SPOKEN_BY_KIND: dict[str, str] = {
     "image": "Picture saved.",
     "audio": "Audio saved.",
     "document": "Document saved.",
+    "archive": "Archive saved.",
     "text": "Text file saved.",
 }
 _SPOKEN_FALLBACK = "File saved."
