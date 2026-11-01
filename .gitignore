@@ -43,6 +43,8 @@ models/
 data/
 inbox/
 outbox/
+logs/
+recordings/
 *.log
 
 # OS

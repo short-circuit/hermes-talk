@@ -14,6 +14,8 @@ dependencies = [
     "uvicorn>=0.30",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "python-multipart>=0.0.9",
+    "pillow>=10.4",
 ]
 
 [project.optional-dependencies]
@@ -21,10 +23,19 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
     "ruff>=0.9",
+    "numpy>=1.26",
+    "av>=12",
+]
+speech = [
+    "sherpa-onnx>=1.10",
+    "kokoro-onnx>=0.3",
+    "faster-whisper>=1.0",
+    "numpy>=1.26",
+    "av>=12",
 ]
 
 [tool.setuptools]
-packages = ["relay"]
+packages = ["relay", "relay.auth", "relay.logging", "relay.speech", "relay.storage", "relay.api"]
 package-dir = {relay = "."}
 
 [tool.ruff]
@@ -44,3 +55,6 @@ testpaths = ["tests"]
 pythonpath = [".."]
 addopts = "-q"
 filterwarnings = ["error::DeprecationWarning:relay.*"]
+markers = [
+    "integration: exercises real local speech models and skips without them",
+]

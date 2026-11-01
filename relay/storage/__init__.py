@@ -1,0 +1,51 @@
+"""Attachment storage primitives for the Hermes Talk relay."""
+
+from __future__ import annotations
+
+from relay.storage.inbox import (
+    ALLOWED_TYPES,
+    INLINE_IMAGE_MAX_BYTES,
+    MAX_SNIFF_BYTES,
+    AllowedType,
+    AsyncReadable,
+    Attachment,
+    AttachmentNotFoundError,
+    CorruptMediaError,
+    EmptyUploadError,
+    FileTooLargeError,
+    InboxConfigError,
+    InboxError,
+    InboxStore,
+    InboxUnavailableError,
+    TypeMismatchError,
+    UnsupportedTypeError,
+    UploadBusyError,
+    canonical_extension,
+    extension_matches,
+    sanitize_filename,
+    sniff_mime,
+)
+
+__all__ = [
+    "ALLOWED_TYPES",
+    "INLINE_IMAGE_MAX_BYTES",
+    "MAX_SNIFF_BYTES",
+    "AllowedType",
+    "AsyncReadable",
+    "Attachment",
+    "AttachmentNotFoundError",
+    "CorruptMediaError",
+    "EmptyUploadError",
+    "FileTooLargeError",
+    "InboxConfigError",
+    "InboxError",
+    "InboxStore",
+    "InboxUnavailableError",
+    "TypeMismatchError",
+    "UnsupportedTypeError",
+    "UploadBusyError",
+    "canonical_extension",
+    "extension_matches",
+    "sanitize_filename",
+    "sniff_mime",
+]

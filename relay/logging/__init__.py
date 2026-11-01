@@ -1,0 +1,113 @@
+"""Structured logging, redaction, audit, retention, and audio helpers.
+
+This package preserves the original ``relay.logging`` import surface while
+splitting the implementation into focused modules.
+"""
+
+from __future__ import annotations
+
+from relay.logging.audio import (
+    AudioRecorder,
+    audio_debug_enabled,
+    describe_audio,
+)
+from relay.logging.audit import (
+    AuditLog,
+    audit,
+    audit_approval_decided,
+    audit_approval_requested,
+    audit_attachment,
+    audit_auth_failure,
+    audit_run_started,
+    audit_run_stopped,
+    audit_token_issued,
+    audit_token_revoked,
+    configure_audit,
+    get_audit_log,
+    reset_audit,
+    sha256_hex,
+    token_prefix,
+    transcript_hash,
+)
+from relay.logging.core import (
+    HumanFormatter,
+    JsonFormatter,
+    configure_logging,
+    get_correlation_id,
+    log_request,
+    reset_correlation_id,
+    set_correlation_id,
+)
+from relay.logging.redact import (
+    RedactingFilter,
+    RedactionConfig,
+    configure_redaction,
+    path_is_inside_repo,
+    redact,
+    redact_headers,
+    redact_path,
+    redact_text,
+    redact_value,
+    register_secret,
+    register_secrets,
+    registered_secret_count,
+    repo_root,
+    reset_redaction,
+    reset_registered_secrets,
+    scrub,
+)
+from relay.logging.retention import (
+    PruneAction,
+    PrunePolicy,
+    plan_prune,
+    prune_logs,
+)
+
+__all__ = [
+    "AudioRecorder",
+    "AuditLog",
+    "HumanFormatter",
+    "JsonFormatter",
+    "PruneAction",
+    "PrunePolicy",
+    "RedactingFilter",
+    "RedactionConfig",
+    "audio_debug_enabled",
+    "audit",
+    "audit_approval_decided",
+    "audit_approval_requested",
+    "audit_attachment",
+    "audit_auth_failure",
+    "audit_run_started",
+    "audit_run_stopped",
+    "audit_token_issued",
+    "audit_token_revoked",
+    "configure_audit",
+    "configure_logging",
+    "configure_redaction",
+    "describe_audio",
+    "get_audit_log",
+    "get_correlation_id",
+    "log_request",
+    "path_is_inside_repo",
+    "plan_prune",
+    "prune_logs",
+    "redact",
+    "redact_headers",
+    "redact_path",
+    "redact_text",
+    "redact_value",
+    "register_secret",
+    "register_secrets",
+    "registered_secret_count",
+    "repo_root",
+    "reset_audit",
+    "reset_correlation_id",
+    "reset_redaction",
+    "reset_registered_secrets",
+    "scrub",
+    "set_correlation_id",
+    "sha256_hex",
+    "token_prefix",
+    "transcript_hash",
+]

@@ -10,7 +10,12 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin relay
 
 COPY pyproject.toml README.md ./
-COPY __init__.py config.py logging.py app.py ./
+COPY __init__.py config.py app.py limits.py tokens.py ./
+COPY logging ./logging/
+COPY auth ./auth/
+COPY storage ./storage/
+COPY api ./api/
+COPY speech ./speech/
 
 RUN pip install --no-cache-dir .
 
