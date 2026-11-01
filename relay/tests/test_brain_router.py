@@ -266,6 +266,35 @@ def test_policy_farewell_and_presence_text() -> None:
 
 
 @pytest.mark.parametrize(
+    "utterance",
+    [
+        "I'm done with the report, email it to Anna.",
+        "See you tomorrow at the meeting.",
+        "That's all I need for the email.",
+    ],
+)
+def test_farewell_phrase_mid_sentence_is_not_terminal(utterance: str) -> None:
+    assert DirectAnswerPolicy(clock=lambda: FIXED_NOW).resolve(utterance) is None
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Thanks, that's all for now.",
+        "Bye, talk later.",
+        "I'm done.",
+        "Good night.",
+        "Nothing else, thanks.",
+    ],
+)
+def test_terminal_farewell_is_end_call(utterance: str) -> None:
+    decision = DirectAnswerPolicy(clock=lambda: FIXED_NOW).resolve(utterance)
+    assert decision is not None
+    assert decision.tool == "end_call"
+    assert decision.rule == "farewell"
+
+
+@pytest.mark.parametrize(
     ("utterance", "expected"),
     [
         ("What's seventeen times four?", "Seventeen times four is 68."),
@@ -397,6 +426,23 @@ def test_streaming_answer_direct_decodes_split_escapes() -> None:
         assert decision.source == "model"
         assert decision.ttft_ms is not None
         assert decision.ttft_ms >= 0.0
+        await router.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("text", ["\U0001f604", "</think>"])
+def test_empty_spoken_answer_direct_is_protocol_error(text: str) -> None:
+    frames = [
+        _tool_frame(name="answer_direct", arguments=json.dumps({"text": text})),
+        _chunk({}, "tool_calls"),
+        "[DONE]",
+    ]
+    router = _router(_mock_transport(_sse(*frames)))
+
+    async def scenario() -> None:
+        with pytest.raises(RouterProtocolError, match="answer_direct"):
+            await router.decide("Say something.")
         await router.aclose()
 
     asyncio.run(scenario())
@@ -718,6 +764,34 @@ def test_unreachable_endpoint_is_router_unavailable() -> None:
 
     async def scenario() -> None:
         with pytest.raises(RouterUnavailable, match="VOICE_BRAIN_BASE_URL"):
+            await router.decide("Email Anna.")
+        await router.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_server_error_is_router_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom", request=request)
+
+    router = _router(httpx.MockTransport(handler))
+
+    async def scenario() -> None:
+        with pytest.raises(RouterUnavailable, match="VOICE_BRAIN_BASE_URL"):
+            await router.decide("Email Anna.")
+        await router.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_client_error_stays_router_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="unsupported tool_choice", request=request)
+
+    router = _router(httpx.MockTransport(handler))
+
+    async def scenario() -> None:
+        with pytest.raises(RouterProtocolError, match="HTTP 400"):
             await router.decide("Email Anna.")
         await router.aclose()
 

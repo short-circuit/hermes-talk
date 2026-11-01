@@ -311,6 +311,20 @@ _FAREWELL_PHRASES: tuple[str, ...] = (
     "hang up",
     "end the call",
 )
+# Trailing filler that may follow a farewell phrase at the very end of an
+# utterance ("Thanks, that's all for now.").  Anything else after the phrase
+# means the phrase was mid-sentence and the utterance goes to the model.
+_FAREWELL_FILLERS: tuple[str, ...] = (
+    "for now",
+    "thank you",
+    "thanks",
+    "everyone",
+    "then",
+    "okay",
+    "ok",
+    "so",
+    "all",
+)
 _TIME_PHRASES: tuple[str, ...] = (
     "what time is it",
     "what's the time",
@@ -339,7 +353,23 @@ def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str]:
     return re.compile(rf"\b(?:{alternatives})\b")
 
 
-_FAREWELL_RE = _phrase_pattern(_FAREWELL_PHRASES)
+def _terminal_phrase_pattern(phrases: tuple[str, ...], fillers: tuple[str, ...]) -> re.Pattern[str]:
+    """Match a phrase only when it ends the utterance.
+
+    Trailing punctuation, whitespace, and a short list of filler words are
+    allowed after the phrase; any other word means the phrase was mid-sentence.
+    """
+    alternatives = "|".join(re.escape(phrase) for phrase in phrases)
+    trailing_fillers = "|".join(re.escape(filler) for filler in fillers)
+    separator = r"[\s,.;:!?\u2014\u2013-]*"
+    return re.compile(
+        rf"\b(?:{alternatives})\b"
+        rf"(?:{separator}(?:{trailing_fillers})\b)*"
+        rf"{separator}$"
+    )
+
+
+_FAREWELL_RE = _terminal_phrase_pattern(_FAREWELL_PHRASES, _FAREWELL_FILLERS)
 _TIME_RE = _phrase_pattern(_TIME_PHRASES)
 _DATE_RE = _phrase_pattern(_DATE_PHRASES)
 _PRESENCE_RE = _phrase_pattern(_PRESENCE_PHRASES)
@@ -438,6 +468,11 @@ class DirectAnswerPolicy:
 
     * ``farewell``: "Bye, talk later" is answered instead of ending the call in
       roughly half of measured runs; ending a call is a local session decision.
+      The phrase must be terminal: it ends the utterance, allowing only
+      punctuation and a short list of trailing fillers such as "for now" or
+      "thanks".  A farewell phrase in the middle of a sentence is usually a
+      request ("I'm done with the report, email it to Anna"), not a sign-off,
+      so those utterances are left to the model.
     * ``time``/``date``: the relay already knows the local clock; a model cannot
       know it without being told and tends to echo the context line.
     * ``arithmetic``: full-match simple expressions are cheaper and exact
@@ -877,6 +912,9 @@ class VoiceBrainRouter:
 
         if state.name == "answer_direct":
             final_text = spoken_text(arguments["text"])
+            if not final_text:
+                msg = f"tool call {state.name!r} returned text that sanitised to an empty string"
+                raise RouterProtocolError(msg)
             if ttft_ms is None:
                 ttft_ms = total_ms
             if final_text.startswith(emitted) and len(final_text) > len(emitted):
@@ -937,6 +975,14 @@ class VoiceBrainRouter:
         client = self._client_or_create()
         url = self.config.base_url.rstrip("/") + "/v1/chat/completions"
         async with client.stream("POST", url, json=body, headers=headers) as response:
+            if response.status_code >= 500:
+                raw = await response.aread()
+                detail = raw.decode("utf-8", "replace")[:300]
+                msg = (
+                    f"voice-brain router endpoint returned HTTP {response.status_code}: "
+                    f"{detail}; {_unavailable_message(self.config.base_url)}"
+                )
+                raise RouterUnavailable(msg)
             if response.status_code >= 400:
                 raw = await response.aread()
                 detail = raw.decode("utf-8", "replace")[:300]
