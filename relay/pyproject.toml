@@ -37,7 +37,7 @@ speech = [
 ]
 
 [tool.setuptools]
-packages = ["relay", "relay.auth", "relay.brain", "relay.logging", "relay.speech", "relay.storage", "relay.api", "relay.maintenance", "relay.transport"]
+packages = ["relay", "relay.auth", "relay.brain", "relay.logging", "relay.speech", "relay.storage", "relay.api", "relay.maintenance", "relay.transport", "relay.hermes"]
 package-dir = {relay = "."}
 
 [tool.setuptools.package-data]

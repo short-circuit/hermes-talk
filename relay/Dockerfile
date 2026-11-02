@@ -20,6 +20,7 @@ COPY api ./api/
 COPY speech ./speech/
 COPY maintenance ./maintenance/
 COPY transport ./transport/
+COPY hermes ./hermes/
 
 # The speech extras are installed here, not left to the operator: inside a
 # container there is no easy way to add them later, and the relay's whole

@@ -1,0 +1,1 @@
+{"id": 0, "data": {"event": "run.cancelled", "run_id": "run_fixture00000000000000000000000001", "timestamp": 1793616035.1420393, "completed": false, "partial": false, "interrupted": true, "turn_exit_reason": "interrupted_during_api_call", "seq": 0}}
