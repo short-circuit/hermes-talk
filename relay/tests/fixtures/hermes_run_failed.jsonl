@@ -1,0 +1,1 @@
+{"id": 0, "data": {"event": "run.failed", "run_id": "run_fixture00000000000000000000000004", "timestamp": 1793611503.3650925, "error": "The turn did not complete.\nUse /retry to try again.", "completed": false, "partial": false, "interrupted": false, "seq": 0}}

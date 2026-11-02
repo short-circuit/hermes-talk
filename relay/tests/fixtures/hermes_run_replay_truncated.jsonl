@@ -1,0 +1,3 @@
+{"id": 40, "data": {"event": "replay.truncated", "run_id": "run_fixture00000000000000000000000005", "timestamp": 1793616000.0, "oldest_retained_seq": 40, "requested_seq": 3, "seq": 40}}
+{"id": 41, "data": {"event": "message.delta", "run_id": "run_fixture00000000000000000000000005", "timestamp": 1793616002.3202968, "delta": "\n\nLinux", "seq": 41}}
+{"id": 42, "data": {"event": "run.completed", "run_id": "run_fixture00000000000000000000000005", "timestamp": 1793616002.4686923, "output": "Linux", "usage": {"input_tokens": 41321, "output_tokens": 44, "total_tokens": 41365}, "runtime": {"provider": "", "model": "", "route_source": "global"}, "completed": true, "partial": false, "interrupted": false, "seq": 42}}
