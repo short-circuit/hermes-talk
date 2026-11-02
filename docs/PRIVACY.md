@@ -31,7 +31,7 @@ and in the pre-commit hook `repo-hygiene`. Rule ids are stable — cite them in 
 | **R2** | absolute home-directory paths `/home/<user>/…` and `/Users/<user>/…` | `/home/runner/` (GitHub-hosted runner), documented placeholders such as `/home/<user>/…`, `$HOME`, `${DATA_DIR}` |
 | **R3** | hard-coded RFC 1918 addresses — `10/8`, `172.16/12`, `192.168/16` | `127.0.0.1`, TEST-NET `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` |
 | **R4** | secret-shaped tokens: `sk-…`, `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_…`, `xox[baprs]-…`, `AKIA…`, `AIza…`, `hf_…`, `glpat-…`, and `-----BEGIN … PRIVATE KEY-----` blocks | none — values belong in `.env` or CI secrets |
-| **R5** | any file over the size cap (default 2 MiB) | none; raise the cap deliberately with `HYGIENE_MAX_BYTES` and say why in the PR |
+| **R5** | any file over the size cap (default 2 MiB) | one path-scoped exception: `android/app/src/main/assets/wakeword/*.onnx` may be up to 6 MiB for the bundled sherpa-onnx KWS model; every other path keeps the 2 MiB cap, or raise the global cap deliberately with `HYGIENE_MAX_BYTES` and say why in the PR |
 | **R6** | committed environment files (`.env`, `.env.*`) | `.env.example` |
 | **R7** | private-suffix hostnames (`*.local`, `*.lan`, `*.home`, `*.internal`) | synthetic `*.example.lan`, `*.example.local`, `*.example.home`, `*.example.internal` |
 

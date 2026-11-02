@@ -14,6 +14,12 @@
 #   R6  committed environment file (.env and .env.*, except .env.example)
 #   R7  private-suffix hostname (*.local, *.lan, *.home, *.internal)
 #
+# R5 size exception (documented, path-scoped):
+#   android/app/src/main/assets/wakeword/*.onnx may be up to 6 MiB. The
+#   sherpa-onnx KWS int8 encoder is 4.6 MiB; the model ships inside the APK and
+#   recompressing it would change the pinned model. Every other path keeps the
+#   default 2 MiB cap.
+#
 # Usage:
 #   scripts/check_repo_hygiene.sh              scan the current repository
 #   scripts/check_repo_hygiene.sh --self-test  prove every rule fires on fixtures
@@ -27,6 +33,7 @@
 set -uo pipefail
 
 MAX_BYTES=${HYGIENE_MAX_BYTES:-2097152}
+SIZE_EXCEPTION_CAP=6291456
 SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 
 EMAIL_RE='[[:alnum:]_.%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}'
@@ -72,13 +79,26 @@ r_lan() { grep -HnoIE -- "$LAN_RE" "$@" 2>/dev/null; }
 r_secret() { grep -HnoIE -- "$SECRET_RE" "$@" 2>/dev/null; }
 r_host() { grep -HnoIE -- "$HOST_RE" "$@" 2>/dev/null | drop_allowed "$HOST_ALLOW_RE"; }
 
+size_cap_for() {
+  # The only documented R5 exception: the bundled sherpa-onnx KWS models.
+  case "$1" in
+    android/app/src/main/assets/wakeword/*.onnx|*/android/app/src/main/assets/wakeword/*.onnx)
+      printf '%s' "$SIZE_EXCEPTION_CAP"
+      ;;
+    *)
+      printf '%s' "$MAX_BYTES"
+      ;;
+  esac
+}
+
 r_size() {
-  local f size
+  local f size cap
   for f in "$@"; do
     [ -f "$f" ] || continue
     size=$(wc -c <"$f")
-    if [ "$size" -gt "$MAX_BYTES" ]; then
-      printf '%s:0:%s bytes (cap %s)\n' "$f" "$size" "$MAX_BYTES"
+    cap=$(size_cap_for "$f")
+    if [ "$size" -gt "$cap" ]; then
+      printf '%s:0:%s bytes (cap %s)\n' "$f" "$size" "$cap"
     fi
   done
 }
@@ -238,6 +258,31 @@ self_test() {
     printf 'hygiene self-test: FAIL R5 false positive on small file\n' >&2
     rc=1
   fi
+
+  # R5 path-scoped exception: the bundled wake-word ONNX models may reach 6 MiB.
+  local exception_dir="$tmp/android/app/src/main/assets/wakeword"
+  mkdir -p "$exception_dir"
+  head -c $((MAX_BYTES + 1)) /dev/zero >"$exception_dir/between.onnx"
+  if [ -z "$(r_size "$exception_dir/between.onnx")" ]; then
+    printf 'hygiene self-test: ok   R5 exception accepts %s bytes in wakeword/*.onnx\n' "$((MAX_BYTES + 1))"
+  else
+    printf 'hygiene self-test: FAIL R5 exception rejected a file between the default and exception caps\n' >&2
+    rc=1
+  fi
+  head -c $((SIZE_EXCEPTION_CAP + 1)) /dev/zero >"$exception_dir/over.onnx"
+  if [ -n "$(r_size "$exception_dir/over.onnx")" ]; then
+    printf 'hygiene self-test: ok   R5 exception rejects %s bytes in wakeword/*.onnx\n' "$((SIZE_EXCEPTION_CAP + 1))"
+  else
+    printf 'hygiene self-test: FAIL R5 exception accepted a file over the exception cap\n' >&2
+    rc=1
+  fi
+  head -c $((MAX_BYTES + 1)) /dev/zero >"$tmp/outside-exception.bin"
+  if [ -n "$(r_size "$tmp/outside-exception.bin")" ]; then
+    printf 'hygiene self-test: ok   R5 still rejects %s bytes outside the exception\n' "$((MAX_BYTES + 1))"
+  else
+    printf 'hygiene self-test: FAIL R5 accepted an oversized file outside the exception\n' >&2
+    rc=1
+  fi
   printf 'API_KEY=x\n' >"$tmp/.env"
   if [ -n "$(r_envfile "$tmp/.env")" ]; then
     printf 'hygiene self-test: ok   R6 fired on .env\n'
@@ -285,7 +330,7 @@ self_test() {
 case "${1:-}" in
   --self-test) self_test ;;
   --help | -h)
-    sed -n '2,30p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,45p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   "")

@@ -51,6 +51,12 @@ class MainActivity : ComponentActivity() {
                 appViewModel.onCallMicPermissionResult(granted)
             }
 
+            val wakeWordPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                appViewModel.onWakeWordPermissionResult(granted)
+            }
+
             val batteryLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
             ) {
@@ -88,6 +94,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val setWakeWordEnabled: (Boolean) -> Unit = { enabled ->
+                if (
+                    enabled &&
+                    ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    wakeWordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    appViewModel.setWakeWordEnabled(enabled)
+                }
+            }
+
             HermesTalkTheme {
                 AppRoot(
                     uiState = uiState,
@@ -98,6 +118,7 @@ class MainActivity : ComponentActivity() {
                     requestConnect = requestConnect,
                     requestCallMicPermission = requestCallMicPermission,
                     requestBatteryExemption = requestBatteryExemption,
+                    setWakeWordEnabled = setWakeWordEnabled,
                 )
             }
         }
@@ -114,6 +135,7 @@ private fun AppRoot(
     requestConnect: () -> Unit,
     requestCallMicPermission: () -> Unit,
     requestBatteryExemption: () -> Unit,
+    setWakeWordEnabled: (Boolean) -> Unit,
 ) {
     when (screen) {
         AppScreen.Settings -> SettingsScreen(
@@ -141,6 +163,10 @@ private fun AppRoot(
                 viewModel.startCall()
             },
             onBack = { onNavigate(AppScreen.Settings) },
+            onWakeWordToggle = setWakeWordEnabled,
+            onWakeWordSensitivity = viewModel::setWakeWordSensitivity,
+            onPushToTalkPressed = viewModel::pushToTalkPressed,
+            onPushToTalkReleased = viewModel::pushToTalkReleased,
         )
 
         AppScreen.Call -> CallScreen(

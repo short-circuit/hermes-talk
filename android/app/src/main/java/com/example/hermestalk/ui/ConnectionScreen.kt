@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -18,10 +19,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -29,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +42,8 @@ import com.example.hermestalk.R
 import com.example.hermestalk.rtvi.ConnectionState
 import com.example.hermestalk.rtvi.FailureReason
 import com.example.hermestalk.rtvi.RelayEndpoint
+import com.example.hermestalk.wakeword.WakeWordSensitivity
+import com.example.hermestalk.wakeword.WakeWordState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -60,6 +66,10 @@ fun ConnectionScreen(
     onRetry: () -> Unit,
     onStartCall: () -> Unit,
     onBack: () -> Unit,
+    onWakeWordToggle: (Boolean) -> Unit,
+    onWakeWordSensitivity: (WakeWordSensitivity) -> Unit,
+    onPushToTalkPressed: () -> Unit,
+    onPushToTalkReleased: () -> Unit,
 ) {
     val state = uiState.connectionState
     val statusColor = statusColor(state)
@@ -234,6 +244,68 @@ fun ConnectionScreen(
                 }
             }
 
+            Card {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.wake_word_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(stringResource(R.string.wake_word_enabled))
+                        Switch(
+                            checked = uiState.wakeWordEnabled,
+                            onCheckedChange = onWakeWordToggle,
+                            modifier = Modifier.testTag("wake_word_switch"),
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.wake_word_sensitivity),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        WakeWordSensitivity.entries.forEach { preset ->
+                            FilterChip(
+                                selected = uiState.wakeWordSensitivity == preset,
+                                onClick = { onWakeWordSensitivity(preset) },
+                                label = { Text(sensitivityLabel(preset)) },
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("push_to_talk")
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = {
+                                        onPushToTalkPressed()
+                                        tryAwaitRelease()
+                                        onPushToTalkReleased()
+                                    },
+                                )
+                            },
+                    ) {
+                        Text(stringResource(R.string.wake_word_hold_to_talk))
+                    }
+                    Text(
+                        text = wakeWordStatus(uiState.wakeWordState),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = wakeWordStatusColor(uiState.wakeWordState),
+                    )
+                }
+            }
+
             Button(
                 onClick = onConnect,
                 modifier = Modifier.fillMaxWidth(),
@@ -290,7 +362,7 @@ fun ConnectionScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
-                                text = statusLabel(entry.state),
+                                text = entry.note ?: statusLabel(entry.state),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -333,6 +405,42 @@ private fun reasonLabel(reason: FailureReason): String = when (reason) {
     FailureReason.InvalidConfiguration -> stringResource(R.string.error_reason_invalid_configuration)
     FailureReason.TlsRejected -> stringResource(R.string.error_reason_tls_rejected)
     FailureReason.Unexpected -> stringResource(R.string.error_reason_unexpected)
+}
+
+@Composable
+private fun sensitivityLabel(preset: WakeWordSensitivity): String = when (preset) {
+    WakeWordSensitivity.Sensitive -> stringResource(R.string.wake_word_sensitivity_sensitive)
+    WakeWordSensitivity.Balanced -> stringResource(R.string.wake_word_sensitivity_balanced)
+    WakeWordSensitivity.Strict -> stringResource(R.string.wake_word_sensitivity_strict)
+}
+
+@Composable
+private fun wakeWordStatus(state: WakeWordState): String = when (state) {
+    is WakeWordState.Off -> stringResource(R.string.wake_word_status_off)
+    is WakeWordState.Starting -> stringResource(R.string.wake_word_status_starting)
+    is WakeWordState.Listening -> stringResource(R.string.wake_word_status_listening)
+    is WakeWordState.Detected -> stringResource(R.string.wake_word_status_detected)
+    is WakeWordState.Stopping -> stringResource(R.string.wake_word_status_stopping)
+    is WakeWordState.PermissionDenied -> stringResource(R.string.wake_word_status_permission_denied)
+    is WakeWordState.Unavailable -> stringResource(R.string.wake_word_status_unavailable, state.reason)
+    is WakeWordState.Failed -> stringResource(R.string.wake_word_status_failed, state.reason)
+}
+
+private fun wakeWordStatusColor(state: WakeWordState): Color = when (state) {
+    is WakeWordState.Listening,
+    is WakeWordState.Detected,
+    -> StatusGreen
+
+    is WakeWordState.Starting,
+    is WakeWordState.Stopping,
+    -> StatusAmber
+
+    is WakeWordState.PermissionDenied,
+    is WakeWordState.Unavailable,
+    is WakeWordState.Failed,
+    -> StatusRed
+
+    is WakeWordState.Off -> StatusGrey
 }
 
 private fun statusColor(state: ConnectionState): Color = when (state) {

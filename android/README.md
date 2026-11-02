@@ -9,6 +9,9 @@ screen plus a visible connection state machine.
 - `app` — Compose UI, settings persistence, connection screen, `AppViewModel`.
 - `rtvi` — relay endpoint validation, encrypted token storage, connection state
   machine, health probe and the Pipecat SmallWebRTC session wrapper.
+- `wakeword` — on-device sherpa-onnx keyword spotting for “Hey Hermes”, the
+  false-trigger log and push-to-talk fallback. See
+  [`wakeword/README.md`](wakeword/README.md).
 - `stub-relay` — Python `aiortc` test fixture that implements the RTVI
   signalling surface used by the app.
 
@@ -136,9 +139,46 @@ a healthy `/health` response is not treated as dead.
 - The optional stub-relay bearer token is a development fixture, not a
   production authentication scheme.
 
+## On-device wake word
+
+The `:wakeword` module adds local keyword spotting for “Hey Hermes”. The
+sherpa-onnx KWS model assets live in `app/src/main/assets/wakeword/` and are
+committed. The native JNI libraries are not committed: the `:wakeword`
+`preBuild` task downloads the pinned sherpa-onnx v2.0.1 Android archive, verifies
+its SHA-256 and extracts only the `arm64-v8a` and `x86_64` JNI folders. The first
+build therefore needs network access; later builds skip the download when the
+extracted directory is complete. The app is limited to those two ABIs.
+
+The wake word is foreground-only. The module never creates or restarts a
+foreground service. It stops listening before a call starts so the call owns the
+microphone and resumes when the call ends if the preference is still enabled.
+Push-to-talk is available as a fallback even when the keyword engine or native
+library is unavailable.
+
+Run the JVM tests with:
+
+```sh
+cd android
+./gradlew :wakeword:test
+```
+
+The instrumentation tests cover the model fixtures, permission denial,
+push-to-talk and a long battery run:
+
+```sh
+cd android
+./gradlew :app:assembleDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest
+```
+
+The battery test is annotated `@LargeTest` and defaults to 60 minutes; override
+the window with `-e wakeWordBatteryMinutes 60`. It writes `usage.json` to the app
+files directory and logs the summary under the `WakeWordUsage` tag. See
+[`wakeword/README.md`](wakeword/README.md) for the model provenance, tuning,
+sensitivity presets and the false-trigger log.
+
 ## Deliberately not in this card
 
-- Wake-word detection.
 - Attachments and upload queue.
 - STT/TTS/LLM behaviour (the stub relay sends only a tone).
 

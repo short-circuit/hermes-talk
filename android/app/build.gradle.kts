@@ -16,6 +16,10 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+
         buildConfigField("String", "DEFAULT_RELAY_URL", "\"http://127.0.0.1:8790\"")
     }
 
@@ -53,6 +57,7 @@ kotlin {
 dependencies {
     implementation(project(":rtvi"))
     implementation(project(":app:call"))
+    implementation(project(":wakeword"))
 
     implementation(platform("androidx.compose:compose-bom:2025.12.01"))
     implementation("androidx.compose.ui:ui")

@@ -66,6 +66,22 @@
     <string name="event_log_title">Recent events</string>
     <string name="no_events">No events yet</string>
 
+    <string name="wake_word_title">Wake word</string>
+    <string name="wake_word_enabled">Listen for “Hey Hermes”</string>
+    <string name="wake_word_sensitivity">Sensitivity</string>
+    <string name="wake_word_sensitivity_sensitive">Sensitive</string>
+    <string name="wake_word_sensitivity_balanced">Balanced</string>
+    <string name="wake_word_sensitivity_strict">Strict</string>
+    <string name="wake_word_hold_to_talk">Hold to talk</string>
+    <string name="wake_word_status_off">Wake word: off</string>
+    <string name="wake_word_status_starting">Wake word: starting…</string>
+    <string name="wake_word_status_listening">Wake word: listening on-device</string>
+    <string name="wake_word_status_detected">Wake word: detected</string>
+    <string name="wake_word_status_stopping">Wake word: stopping…</string>
+    <string name="wake_word_status_permission_denied">Wake word: microphone permission denied</string>
+    <string name="wake_word_status_unavailable">Wake word unavailable: %1$s</string>
+    <string name="wake_word_status_failed">Wake word failed: %1$s</string>
+
     <string name="error_reason_unreachable">Relay unreachable</string>
     <string name="error_reason_unauthorized">Unauthorized</string>
     <string name="error_reason_not_ready">Relay not ready</string>

@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.hermestalk.call.AudioRoute
 import com.example.hermestalk.call.CallControllers
 import com.example.hermestalk.call.CallUiState
+import com.example.hermestalk.call.isLive
 import com.example.hermestalk.rtvi.ConnectionState
 import com.example.hermestalk.rtvi.EncryptedTokenStore
 import com.example.hermestalk.rtvi.FieldError
@@ -17,6 +18,14 @@ import com.example.hermestalk.rtvi.RelaySettingsValidator
 import com.example.hermestalk.rtvi.RtviSession
 import com.example.hermestalk.rtvi.SessionCallbacks
 import com.example.hermestalk.rtvi.TlsTrust
+import com.example.hermestalk.wakeword.PushToTalkEffect
+import com.example.hermestalk.wakeword.SharedPreferencesWakeWordSettingsStore
+import com.example.hermestalk.wakeword.WakeWordConfig
+import com.example.hermestalk.wakeword.WakeWordController
+import com.example.hermestalk.wakeword.WakeWordSensitivity
+import com.example.hermestalk.wakeword.WakeWordSettings
+import com.example.hermestalk.wakeword.WakeWordSource
+import com.example.hermestalk.wakeword.WakeWordState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,7 +36,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** One state transition shown in the connection screen's event log. */
-data class ConnectionLogEntry(val timestampMillis: Long, val state: ConnectionState)
+data class ConnectionLogEntry(
+    val timestampMillis: Long,
+    val state: ConnectionState,
+    val note: String? = null,
+)
 
 /** Fingerprint discovery progress shown on the settings screen. */
 sealed interface FingerprintState {
@@ -64,6 +77,11 @@ data class AppUiState(
     val micPermissionDenied: Boolean = false,
     val botTranscript: String = "",
     val userAudioLevel: Float = 0f,
+    val wakeWordEnabled: Boolean = false,
+    val wakeWordSensitivity: WakeWordSensitivity = WakeWordSensitivity.Balanced,
+    val wakeWordState: WakeWordState = WakeWordState.Off,
+    val lastWakeWord: String? = null,
+    val falseTriggerCount: Int = 0,
 )
 
 /**
@@ -112,6 +130,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val callController = CallControllers.get(application)
+    private val wakeWordSettingsStore = SharedPreferencesWakeWordSettingsStore(application)
+    private val wakeWordController = WakeWordController.create(
+        application,
+        onWakeWord = {
+            viewModelScope.launch { onWakeWordDetected() }
+        },
+    )
 
     /** Observable UI state. */
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
@@ -119,7 +144,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Observable in-call state owned by the process-wide call controller. */
     val callState: StateFlow<CallUiState> = callController.uiState
 
+    /** Observable wake-word lifecycle state. */
+    val wakeWordState: StateFlow<WakeWordState> = wakeWordController.state
+
+    private var callWasLive = false
+
     init {
+        viewModelScope.launch {
+            wakeWordController.state.collect { state ->
+                _uiState.update { it.copy(wakeWordState = state) }
+            }
+        }
+        viewModelScope.launch {
+            wakeWordController.detections.collect { entry ->
+                _uiState.update { current ->
+                    current.copy(
+                        lastWakeWord = if (entry.source == WakeWordSource.WakeWord) {
+                            entry.keyword
+                        } else {
+                            current.lastWakeWord
+                        },
+                        falseTriggerCount = current.falseTriggerCount +
+                            if (entry.source == WakeWordSource.WakeWord) 1 else 0,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            callState.collect { state ->
+                val live = state.state.isLive
+                if (live && !callWasLive) {
+                    wakeWordController.stop()
+                } else if (!live && callWasLive && _uiState.value.wakeWordEnabled) {
+                    wakeWordController.start()
+                }
+                callWasLive = live
+            }
+        }
+
         viewModelScope.launch {
             val stored = withContext(Dispatchers.IO) { repository.load() }
             if (stored != null) {
@@ -133,6 +195,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         insecureTransport = isCleartext(stored.relayUrl),
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            val settings = withContext(Dispatchers.IO) { wakeWordSettingsStore.load() }
+            _uiState.update { current ->
+                current.copy(
+                    wakeWordEnabled = settings.enabled,
+                    wakeWordSensitivity = settings.sensitivity,
+                )
+            }
+            wakeWordController.updateConfig(WakeWordConfig(sensitivity = settings.sensitivity))
+            if (settings.enabled && !callState.value.state.isLive) {
+                wakeWordController.start()
             }
         }
     }
@@ -286,6 +362,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * the stored relay settings.
      */
     fun startCall() {
+        if (callState.value.state.isLive) {
+            return
+        }
+        wakeWordController.stop()
         session.disconnect()
         _uiState.update { it.copy(isBusy = false) }
         val current = _uiState.value
@@ -297,6 +377,82 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 trustPlatformCa = current.trustPlatformCa,
             ),
         )
+    }
+
+    /** Toggle the wake-word preference. */
+    fun toggleWakeWord() {
+        setWakeWordEnabled(!_uiState.value.wakeWordEnabled)
+    }
+
+    /** Persist and apply the wake-word enabled flag. */
+    fun setWakeWordEnabled(enabled: Boolean) {
+        wakeWordSettingsStore.save(
+            WakeWordSettings(
+                enabled = enabled,
+                sensitivity = _uiState.value.wakeWordSensitivity,
+            ),
+        )
+        _uiState.update { it.copy(wakeWordEnabled = enabled) }
+        if (enabled) {
+            if (!callState.value.state.isLive) {
+                wakeWordController.start()
+            }
+        } else {
+            wakeWordController.stop()
+        }
+    }
+
+    /** Persist and apply the keyword sensitivity preset. */
+    fun setWakeWordSensitivity(preset: WakeWordSensitivity) {
+        wakeWordSettingsStore.save(
+            WakeWordSettings(
+                enabled = _uiState.value.wakeWordEnabled,
+                sensitivity = preset,
+            ),
+        )
+        _uiState.update { it.copy(wakeWordSensitivity = preset) }
+        wakeWordController.updateConfig(WakeWordConfig(sensitivity = preset))
+    }
+
+    /** Feed the wake-word microphone permission result back into the controller. */
+    fun onWakeWordPermissionResult(granted: Boolean) {
+        if (granted) {
+            if (_uiState.value.wakeWordEnabled) {
+                wakeWordController.start()
+            }
+        } else {
+            setWakeWordEnabled(true)
+        }
+    }
+
+    /** Record a push-to-talk press. */
+    fun pushToTalkPressed() {
+        wakeWordController.onPushToTalkPressed()
+    }
+
+    /** Release push-to-talk and start the call when the controller requests it. */
+    fun pushToTalkReleased() {
+        val transition = wakeWordController.onPushToTalkReleased()
+        if (transition.effects.contains(PushToTalkEffect.StartSessionRequested)) {
+            appendConnectionLog("Push to talk")
+            startCall()
+        }
+    }
+
+    private fun onWakeWordDetected() {
+        appendConnectionLog("Wake word: ${_uiState.value.lastWakeWord ?: "HEY HERMES"}")
+        startCall()
+    }
+
+    private fun appendConnectionLog(note: String) {
+        val entry = ConnectionLogEntry(
+            timestampMillis = System.currentTimeMillis(),
+            state = _uiState.value.connectionState,
+            note = note,
+        )
+        _uiState.update { current ->
+            current.copy(eventLog = (current.eventLog + entry).takeLast(20))
+        }
     }
 
     /** Feed the call microphone permission result into the call controller. */
@@ -337,6 +493,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        wakeWordController.release()
         session.release()
         super.onCleared()
     }

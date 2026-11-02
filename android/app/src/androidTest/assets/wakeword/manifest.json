@@ -1,0 +1,84 @@
+{
+  "positives": [
+    {
+      "file": "hey_hermes_af_heart.wav",
+      "voice": "af_heart",
+      "text": "Hey Hermes.",
+      "seconds": 2.42
+    },
+    {
+      "file": "hey_hermes_af_bella.wav",
+      "voice": "af_bella",
+      "text": "hey hermes",
+      "seconds": 2.25
+    },
+    {
+      "file": "hey_hermes_am_michael.wav",
+      "voice": "am_michael",
+      "text": "Hey, Hermes!",
+      "seconds": 2.55
+    },
+    {
+      "file": "hey_hermes_am_adam.wav",
+      "voice": "am_adam",
+      "text": "Hey Hermes.",
+      "seconds": 2.34
+    },
+    {
+      "file": "hey_hermes_bf_emma.wav",
+      "voice": "bf_emma",
+      "text": "hey hermes",
+      "seconds": 2.66
+    },
+    {
+      "file": "hey_hermes_bm_george.wav",
+      "voice": "bm_george",
+      "text": "Hey Hermes.",
+      "seconds": 2.59
+    },
+    {
+      "file": "hey_hermes_af_jessica.wav",
+      "voice": "af_jessica",
+      "text": "Hey Hermes!",
+      "seconds": 2.57
+    },
+    {
+      "file": "hey_hermes_bf_alice.wav",
+      "voice": "bf_alice",
+      "text": "Hey Hermes.",
+      "seconds": 2.74
+    },
+    {
+      "file": "hey_hermes_af_nicole.wav",
+      "voice": "af_nicole",
+      "text": "hey hermes.",
+      "seconds": 2.66
+    },
+    {
+      "file": "hey_hermes_bm_lewis.wav",
+      "voice": "bm_lewis",
+      "text": "Hey Hermes.",
+      "seconds": 2.47
+    }
+  ],
+  "negatives": [
+    {
+      "file": "negative_af_heart.wav",
+      "voice": "af_heart",
+      "text": "Hello world.",
+      "seconds": 2.45
+    },
+    {
+      "file": "negative_am_michael.wav",
+      "voice": "am_michael",
+      "text": "Her mess is on the table.",
+      "seconds": 3.28
+    },
+    {
+      "file": "negative_bf_emma.wav",
+      "voice": "bf_emma",
+      "text": "Hey there, how are you?",
+      "seconds": 2.87
+    }
+  ]
+}
