@@ -13,12 +13,36 @@
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="retry">Retry</string>
+    <string name="start_call">Start call</string>
     <string name="back">Back</string>
+
+    <string name="tls_pin_label">Relay certificate pin (SPKI SHA-256)</string>
+    <string name="tls_pin_hint">sha256/&lt;base64&gt;</string>
+    <string name="fetch_fingerprint">Fetch from relay</string>
+    <string name="fingerprint_fetching">Fetching the relay certificate…</string>
+    <string name="fingerprint_found_title">Relay certificate</string>
+    <string name="fingerprint_value">Fingerprint: %1$s</string>
+    <string name="spki_pin_value">SPKI pin: %1$s</string>
+    <string name="certificate_fingerprint_value">Certificate fingerprint: %1$s</string>
+    <string name="fingerprint_subject_value">Subject: %1$s</string>
+    <string name="fingerprint_issuer_value">Issuer: %1$s</string>
+    <string name="fingerprint_expiry_value">Expires: %1$s</string>
+    <string name="fingerprint_expired">This certificate has expired</string>
+    <string name="use_fingerprint">Use this fingerprint</string>
+    <string name="trust_platform_ca">Trust the Android CA store instead of pinning</string>
+    <string name="trust_platform_ca_hint">The internal CA must be installed in the user trust store: Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate.</string>
 
     <string name="token_saved">Device token saved</string>
     <string name="token_not_saved">Device token not saved</string>
-    <string name="cleartext_notice">Plain HTTP — TLS pinning lands in a follow-up card</string>
+    <string name="cleartext_notice">Insecure development transport: plain HTTP on loopback (adb reverse). Not encrypted.</string>
     <string name="mic_denied_notice">Microphone permission denied — connecting without microphone input</string>
+
+    <string name="tls_rejected_title">Relay certificate rejected</string>
+    <string name="tls_failure_detail">The relay certificate does not match the pinned fingerprint. The connection was refused.</string>
+    <string name="expected_pin_value">Expected pin: %1$s</string>
+    <string name="observed_pin_value">Observed pin: %1$s</string>
+    <string name="not_available">Not available</string>
+    <string name="tls_no_retry_hint">No automatic retry. Fix the pin or install the internal CA, then connect again.</string>
 
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connecting">Connecting…</string>
@@ -50,5 +74,6 @@
     <string name="error_reason_backend_error">Relay error</string>
     <string name="error_reason_transport_closed">Connection closed</string>
     <string name="error_reason_invalid_configuration">Invalid configuration</string>
+    <string name="error_reason_tls_rejected">Relay certificate rejected</string>
     <string name="error_reason_unexpected">Unexpected error</string>
 </resources>

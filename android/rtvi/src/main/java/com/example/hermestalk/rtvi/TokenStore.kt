@@ -10,7 +10,7 @@ import androidx.security.crypto.MasterKey
  * device token in logs.
  */
 interface TokenStore {
-    /** Return the stored settings, or null when either value is missing/blank. */
+    /** Return the stored settings, or null when the relay URL or token is missing/blank. */
     fun read(): RelaySettings?
 
     /** Persist [settings]. */
@@ -24,6 +24,7 @@ interface TokenStore {
  * EncryptedSharedPreferences-backed store. The master key uses AES256-GCM and
  * keys/values are encrypted with AES256-SIV/AES256-GCM respectively.
  *
+ * The store persists the relay URL, device token, TLS pin and platform-CA flag.
  * Failures (for example a corrupt keystore after an app reinstall) are surfaced
  * as null reads and recorded in [lastError] instead of crashing startup.
  */
@@ -56,7 +57,12 @@ class EncryptedTokenStore(context: Context) : TokenStore {
         if (url.isNullOrBlank() || token.isNullOrBlank()) {
             null
         } else {
-            RelaySettings(url, token)
+            RelaySettings(
+                relayUrl = url,
+                deviceToken = token,
+                tlsPin = preferences?.getString(KEY_TLS_PIN, "") ?: "",
+                trustPlatformCa = preferences?.getBoolean(KEY_TRUST_PLATFORM_CA, false) ?: false,
+            )
         }
     } catch (failure: Exception) {
         error = failure.message ?: "Could not read encrypted settings"
@@ -73,6 +79,8 @@ class EncryptedTokenStore(context: Context) : TokenStore {
             store.edit()
                 .putString(KEY_RELAY_URL, settings.relayUrl)
                 .putString(KEY_DEVICE_TOKEN, settings.deviceToken)
+                .putString(KEY_TLS_PIN, settings.tlsPin)
+                .putBoolean(KEY_TRUST_PLATFORM_CA, settings.trustPlatformCa)
                 .apply()
             error = null
         } catch (failure: Exception) {
@@ -97,6 +105,8 @@ class EncryptedTokenStore(context: Context) : TokenStore {
         const val FILE_NAME = "hermes_talk_settings"
         const val KEY_RELAY_URL = "relay_url"
         const val KEY_DEVICE_TOKEN = "device_token"
+        const val KEY_TLS_PIN = "tls_pin"
+        const val KEY_TRUST_PLATFORM_CA = "trust_platform_ca"
     }
 }
 

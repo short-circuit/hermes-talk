@@ -22,7 +22,7 @@ It is **not** the real Hermes Talk relay.
 
 - No STT, TTS, LLM, transcript or turn detection.
 - No authentication beyond the optional bearer token.
-- No TLS. Plain HTTP only.
+- TLS is optional and off by default. Plain HTTP is the default transport.
 - No production relay behaviour (no bot lifecycle, no metrics, no reconnection
   policy).
 
@@ -48,10 +48,27 @@ Options:
 --port 8790        bind port (default: 8790)
 --token <token>    require a bearer token on /start and offers
 --tone / --no-tone serve the 440 Hz tone (default: on)
+--tls-cert <pem>   PEM certificate for TLS (requires --tls-key)
+--tls-key <path>   base64 PKCS#8 DER private key (requires --tls-cert)
 ```
 
 When `--token` is omitted the relay prints `auth: disabled` and accepts requests
 with or without an Authorization header. The token is never printed.
+
+## TLS
+
+To exercise the Android pinning path end to end, start the relay with the
+committed test fixture:
+
+```sh
+.venv/bin/python android/stub-relay/relay.py \
+  --tls-cert android/tls-fixtures/server-a.crt.pem \
+  --tls-key android/tls-fixtures/server-a.key.b64
+```
+
+The relay logs `TLS: enabled` and serves HTTPS. Fetch the fingerprint from the
+app's settings screen and confirm it before saving the pin. Plain HTTP remains
+the default when both TLS options are omitted.
 
 ## Point the Android app at it
 

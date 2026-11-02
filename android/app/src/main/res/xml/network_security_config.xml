@@ -1,9 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Version 1 accepts plain HTTP so the app can talk to a loopback relay and
-    an adb-reversed USB device without certificate setup. The TLS/pinning
-    follow-up card will tighten this to HTTPS-only.
+    Base config denies cleartext traffic by default. The `user` trust anchor is
+    included so the Pipecat SDK's own OkHttp client, which uses the platform
+    trust manager, can honour a user-installed internal CA. App-level
+    certificate pinning is enforced separately by TlsTrust on every probe; this
+    file does not replace that pin.
+
+    Cleartext is re-enabled only for loopback, which is the adb-reverse
+    development path. Non-loopback http URLs are rejected by settings
+    validation before a connection is attempted.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
 </network-security-config>

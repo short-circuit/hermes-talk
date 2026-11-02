@@ -1,0 +1,48 @@
+<resources>
+    <string name="call_title">Call</string>
+    <string name="call_status_idle">Ready to call</string>
+    <string name="call_status_awaiting_permission">Microphone permission needed</string>
+    <string name="call_status_starting_service">Starting call…</string>
+    <string name="call_status_connecting">Connecting to relay…</string>
+    <string name="call_status_active">In call</string>
+    <string name="call_status_reconnecting">Reconnecting…</string>
+    <string name="call_status_ending">Ending call…</string>
+    <string name="call_status_ended">Call ended</string>
+    <string name="call_status_failed">Call failed</string>
+    <string name="call_reconnecting_detail">Attempt %1$d: %2$s</string>
+    <string name="call_duration">Duration: %1$s</string>
+
+    <string name="call_permission_title">Microphone permission denied</string>
+    <string name="call_permission_detail">Hermes Talk needs the microphone to place a call.</string>
+    <string name="grant_microphone">Grant microphone</string>
+    <string name="redial">Redial</string>
+
+    <string name="mute">Mute</string>
+    <string name="unmute">Unmute</string>
+    <string name="end_call">End call</string>
+    <string name="audio_route">Audio route</string>
+    <string name="route_earpiece">Earpiece</string>
+    <string name="route_speaker">Speaker</string>
+    <string name="route_wired_headset">Wired headset</string>
+    <string name="route_bluetooth">Bluetooth</string>
+
+    <string name="battery_prompt_title">Allow background activity</string>
+    <string name="battery_prompt_detail">Keep the call alive while the screen is off.</string>
+    <string name="allow_background">Allow background</string>
+
+    <string name="back">Back</string>
+    <string name="call_visualiser_description">Microphone level</string>
+
+    <string name="failure_microphone_permission_denied">Microphone permission denied</string>
+    <string name="failure_microphone_unavailable">Microphone unavailable</string>
+    <string name="failure_relay_unreachable">Relay unreachable</string>
+    <string name="failure_relay_rejected">Relay rejected the call</string>
+    <string name="failure_handshake_failed">Handshake failed</string>
+    <string name="failure_audio_focus_lost">Audio focus lost</string>
+    <string name="failure_unexpected">Unexpected error</string>
+
+    <string name="call_notification_channel_name">Call</string>
+    <string name="call_notification_channel_description">Microphone call in progress</string>
+    <string name="call_notification_title">Hermes Talk call</string>
+    <string name="call_notification_text">Duration %1$s · %2$s</string>
+</resources>

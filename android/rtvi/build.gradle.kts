@@ -19,6 +19,10 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    sourceSets {
+        getByName("test").resources.srcDir("../tls-fixtures")
+    }
 }
 
 kotlin {

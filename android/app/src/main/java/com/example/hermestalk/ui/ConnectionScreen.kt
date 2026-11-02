@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +58,7 @@ fun ConnectionScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onRetry: () -> Unit,
+    onStartCall: () -> Unit,
     onBack: () -> Unit,
 ) {
     val state = uiState.connectionState
@@ -118,7 +120,58 @@ fun ConnectionScreen(
                 }
             }
 
-            if (state is ConnectionState.Failed) {
+            if (state is ConnectionState.Failed && state.reason == FailureReason.TlsRejected) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                    ),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.tls_rejected_title),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.tls_failure_detail),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.expected_pin_value,
+                                uiState.expectedPin ?: stringResource(R.string.not_available),
+                            ),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.observed_pin_value,
+                                uiState.observedPin ?: stringResource(R.string.not_available),
+                            ),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            text = state.detail,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            text = stringResource(R.string.tls_no_retry_hint),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            } else if (state is ConnectionState.Failed) {
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -204,6 +257,15 @@ fun ConnectionScreen(
             ) {
                 Text(stringResource(R.string.retry))
             }
+            Button(
+                onClick = onStartCall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("start_call"),
+                enabled = state is ConnectionState.Ready,
+            ) {
+                Text(stringResource(R.string.start_call))
+            }
 
             Text(
                 text = stringResource(R.string.event_log_title),
@@ -269,6 +331,7 @@ private fun reasonLabel(reason: FailureReason): String = when (reason) {
     FailureReason.BackendError -> stringResource(R.string.error_reason_backend_error)
     FailureReason.TransportClosed -> stringResource(R.string.error_reason_transport_closed)
     FailureReason.InvalidConfiguration -> stringResource(R.string.error_reason_invalid_configuration)
+    FailureReason.TlsRejected -> stringResource(R.string.error_reason_tls_rejected)
     FailureReason.Unexpected -> stringResource(R.string.error_reason_unexpected)
 }
 

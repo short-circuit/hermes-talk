@@ -26,6 +26,8 @@ class SettingsRepository(private val tokenStore: TokenStore) {
                 RelaySettings(
                     relayUrl = settings.relayUrl.trim(),
                     deviceToken = settings.deviceToken.trim(),
+                    tlsPin = settings.tlsPin.trim(),
+                    trustPlatformCa = settings.trustPlatformCa,
                 ),
             )
         }

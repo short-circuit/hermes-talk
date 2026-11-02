@@ -174,10 +174,14 @@ class RtviSession(
         }
 
         callbacks.onLog("probing relay at ${endpoint.baseUrl()}")
-        when (val result = probe.probe(endpoint, settings.deviceToken)) {
+        val policy = settings.tlsPolicy()
+        when (val result = probe.probe(endpoint, settings.deviceToken, policy)) {
             is ProbeResult.Ok -> Unit
             is ProbeResult.Failure -> {
                 if (generation == sessionGeneration) {
+                    if (result.reason == FailureReason.TlsRejected) {
+                        callbacks.onTlsFailure(result.expectedPin, result.observedPin)
+                    }
                     applyEvent(ConnectionEvent.ProbeFailed(result.reason, result.detail))
                 }
                 return _state.value
@@ -365,16 +369,32 @@ class RtviSession(
         }
         val endpoint = watchdogEndpoint ?: return
         val settings = watchdogSettings ?: return
+        val policy = settings.tlsPolicy()
         watchdog.reset()
         watchdogJob = mainScope.launch {
             while (true) {
                 delay(watchdog.interval)
                 val result = try {
-                    probe.probe(endpoint, settings.deviceToken)
+                    probe.probe(endpoint, settings.deviceToken, policy)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
                     ProbeResult.Failure(FailureReason.Unreachable, "Liveness probe failed")
+                }
+                if (result is ProbeResult.Failure && result.reason == FailureReason.TlsRejected) {
+                    callbacks.onTlsFailure(result.expectedPin, result.observedPin)
+                    val current = _state.value
+                    if (current is ConnectionState.Connected || current is ConnectionState.Ready) {
+                        callbacks.onLog("relay certificate rejected during liveness probe")
+                        applyEvent(
+                            ConnectionEvent.TransportFailed(
+                                FailureReason.TlsRejected,
+                                result.detail,
+                            ),
+                        )
+                    }
+                    stopWatchdogInternal()
+                    return@launch
                 }
                 val alive = when (result) {
                     is ProbeResult.Ok -> true

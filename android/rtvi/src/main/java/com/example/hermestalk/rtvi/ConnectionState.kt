@@ -35,6 +35,13 @@ enum class FailureReason {
     BackendError,
     TransportClosed,
     InvalidConfiguration,
+
+    /**
+     * The relay certificate did not match the configured pin or was not trusted.
+     * The connection is refused and is never silently retried: the user must
+     * fix the pin or install the internal CA before trying again.
+     */
+    TlsRejected,
     Unexpected,
 }
 

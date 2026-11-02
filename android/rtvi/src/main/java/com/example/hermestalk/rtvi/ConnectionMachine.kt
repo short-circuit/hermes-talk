@@ -224,6 +224,7 @@ object ConnectionMachine {
         FailureReason.PermissionDenied,
         FailureReason.BackendError,
         FailureReason.InvalidConfiguration,
+        FailureReason.TlsRejected,
         FailureReason.Unexpected,
         -> false
     }

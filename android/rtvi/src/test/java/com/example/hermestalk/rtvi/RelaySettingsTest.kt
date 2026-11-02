@@ -19,7 +19,9 @@ class RelaySettingsTest {
 
     @Test
     fun shortTokenIsAccepted() {
-        val result = errors(RelaySettings("https://relay.example.com", "abc"))
+        val result = errors(
+            RelaySettings("https://relay.example.com", "abc", trustPlatformCa = true),
+        )
         assertTrue(result.isEmpty())
     }
 
