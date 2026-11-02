@@ -61,6 +61,7 @@ private val StatusRed = Color(0xFFB91C1C)
 @Composable
 fun ConnectionScreen(
     uiState: AppUiState,
+    extraContent: @Composable () -> Unit = {},
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onRetry: () -> Unit,
@@ -129,6 +130,8 @@ fun ConnectionScreen(
                     }
                 }
             }
+
+            extraContent()
 
             if (state is ConnectionState.Failed && state.reason == FailureReason.TlsRejected) {
                 Card(

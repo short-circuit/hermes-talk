@@ -58,6 +58,8 @@ dependencies {
     implementation(project(":rtvi"))
     implementation(project(":app:call"))
     implementation(project(":wakeword"))
+    implementation(project(":attachments"))
+    implementation("androidx.core:core-ktx:1.15.0")
 
     implementation(platform("androidx.compose:compose-bom:2025.12.01"))
     implementation("androidx.compose.ui:ui")

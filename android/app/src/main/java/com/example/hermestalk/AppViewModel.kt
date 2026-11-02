@@ -3,8 +3,12 @@ package com.example.hermestalk
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.hermestalk.attachments.ArtifactUiState
+import com.example.hermestalk.attachments.Attachments
+import com.example.hermestalk.attachments.UploadItem
 import com.example.hermestalk.call.AudioRoute
 import com.example.hermestalk.call.CallControllers
 import com.example.hermestalk.call.CallUiState
@@ -130,6 +134,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val callController = CallControllers.get(application)
+    private val attachmentsController = Attachments.get(application)
     private val wakeWordSettingsStore = SharedPreferencesWakeWordSettingsStore(application)
     private val wakeWordController = WakeWordController.create(
         application,
@@ -146,6 +151,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Observable wake-word lifecycle state. */
     val wakeWordState: StateFlow<WakeWordState> = wakeWordController.state
+
+    /** Observable attachment upload queue. */
+    val uploadItems: StateFlow<List<UploadItem>> = attachmentsController.uploads
+
+    /** Observable relay artifact list and download state. */
+    val artifactState: StateFlow<ArtifactUiState> = attachmentsController.artifactState
+
+    /** Last attachment ingest/upload error, if any. */
+    val attachmentError: StateFlow<String?> = attachmentsController.uploadError
 
     private var callWasLive = false
 
@@ -196,6 +210,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+            // Resume any upload that was persisted before process death.
+            attachmentsController.start(stored ?: relaySettings())
         }
 
         viewModelScope.launch {
@@ -241,6 +257,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 tokenSaved = errors.isEmpty(),
                 insecureTransport = isCleartext(url),
             )
+        }
+        if (errors.isEmpty()) {
+            attachmentsController.updateSettings(relaySettings())
         }
         return errors.isEmpty()
     }
@@ -376,6 +395,61 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 tlsPin = current.tlsPin,
                 trustPlatformCa = current.trustPlatformCa,
             ),
+        )
+    }
+
+    /**
+     * Queue every file from an ACTION_SEND / ACTION_SEND_MULTIPLE intent. The
+     * settings are re-read on an I/O dispatcher so a share that arrives before
+     * the first settings load still uses the saved token.
+     */
+    fun attachFromIntent(intent: Intent) {
+        viewModelScope.launch {
+            val stored = withContext(Dispatchers.IO) { repository.load() }
+            attachmentsController.attachFromIntent(intent, stored ?: relaySettings())
+        }
+    }
+
+    /** Queue one document-picker URI. */
+    fun pickAttachment(uri: Uri) {
+        viewModelScope.launch {
+            val stored = withContext(Dispatchers.IO) { repository.load() }
+            attachmentsController.pickAttachment(uri, stored ?: relaySettings())
+        }
+    }
+
+    /** Refresh the relay artifact list with the current settings. */
+    fun refreshArtifacts() {
+        attachmentsController.refreshArtifacts(relaySettings())
+    }
+
+    /** Download and verify one artifact. */
+    fun downloadArtifact(id: String) {
+        attachmentsController.downloadArtifact(id, relaySettings())
+    }
+
+    /** Open a verified artifact in an installed viewer. */
+    fun openArtifact(id: String) {
+        attachmentsController.openArtifact(id)
+    }
+
+    /** Retry a failed or cancelled upload. */
+    fun retryUpload(id: String) {
+        attachmentsController.retryUpload(id, relaySettings())
+    }
+
+    /** Cancel an upload and remove its persisted payload. */
+    fun cancelUpload(id: String) {
+        attachmentsController.cancelUpload(id)
+    }
+
+    private fun relaySettings(): RelaySettings {
+        val current = _uiState.value
+        return RelaySettings(
+            relayUrl = current.relayUrl,
+            deviceToken = current.deviceToken,
+            tlsPin = current.tlsPin,
+            trustPlatformCa = current.trustPlatformCa,
         )
     }
 

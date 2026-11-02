@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the two attachment-owned trees are exposed through the FileProvider. -->
+<paths>
+    <cache-path
+        name="artifacts"
+        path="artifacts/" />
+    <files-path
+        name="attachments"
+        path="attachments/" />
+</paths>

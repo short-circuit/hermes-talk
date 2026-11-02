@@ -56,6 +56,7 @@ import com.example.hermestalk.call.isLive
 @Composable
 fun CallScreen(
     uiState: CallUiState,
+    attachmentPanel: @Composable () -> Unit = {},
     onToggleMute: () -> Unit,
     onEndCall: () -> Unit,
     onSelectRoute: (AudioRoute) -> Unit,
@@ -123,6 +124,8 @@ fun CallScreen(
                 }
             }
         }
+
+        attachmentPanel()
 
         if (
             state is CallState.AwaitingMicPermission ||
