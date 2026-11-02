@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "hermes-talk"
-include(":app", ":rtvi", ":app:call", ":wakeword")
+include(":app", ":rtvi", ":app:call", ":wakeword", ":attachments")

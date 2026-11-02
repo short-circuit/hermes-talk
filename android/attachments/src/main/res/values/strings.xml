@@ -1,0 +1,25 @@
+<resources>
+    <string name="attachment_title">Attachments</string>
+    <string name="attachment_pick">Attach file</string>
+    <string name="attachment_empty">No attachments in this conversation yet.</string>
+    <string name="attachment_queued">Queued</string>
+    <string name="attachment_uploading">Uploading…</string>
+    <string name="attachment_retrying">Retrying in %1$d s (attempt %2$d)</string>
+    <string name="attachment_sent">Sent: %1$s</string>
+    <string name="attachment_failed">Failed: %1$s</string>
+    <string name="attachment_cancelled">Cancelled</string>
+    <string name="attachment_retry">Retry</string>
+    <string name="attachment_cancel">Cancel</string>
+    <string name="attachment_size">%1$d bytes</string>
+    <string name="attachment_error">Attachment error: %1$s</string>
+
+    <string name="artifact_title">Relay artifacts</string>
+    <string name="artifact_refresh">Refresh artifacts</string>
+    <string name="artifact_empty">No artifacts on the relay.</string>
+    <string name="artifact_download">Download</string>
+    <string name="artifact_open">Open</string>
+    <string name="artifact_downloading">Downloading…</string>
+    <string name="artifact_downloaded">Downloaded and verified</string>
+    <string name="artifact_download_failed">Download failed: %1$s</string>
+    <string name="artifact_item_detail">%1$s · %2$d bytes</string>
+</resources>
