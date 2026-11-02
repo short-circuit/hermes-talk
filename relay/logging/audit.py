@@ -283,6 +283,7 @@ def audit_approval_requested(
     transcript_sha256: str,
     tool: str | None = None,
     summary: str | None = None,
+    command_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Record a pending approval request without transcript text."""
     return audit(
@@ -292,6 +293,7 @@ def audit_approval_requested(
         transcript_sha256=transcript_sha256,
         tool=tool,
         summary=summary,
+        command_sha256=command_sha256,
     )
 
 
@@ -301,6 +303,8 @@ def audit_approval_decided(
     decision: str,
     transcript_sha256: str | None = None,
     actor: str | None = None,
+    reason: str | None = None,
+    command_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Record an approval decision: approved, denied, or timeout."""
     normalized = str(decision).strip().lower()
@@ -314,6 +318,8 @@ def audit_approval_decided(
         decision=normalized,
         transcript_sha256=transcript_sha256,
         actor=actor,
+        reason=reason,
+        command_sha256=command_sha256,
     )
 
 

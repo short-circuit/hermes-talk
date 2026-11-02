@@ -5,12 +5,17 @@ approval gate, and tool narration.
 """
 
 from relay.brain.approvals import (
+    READ_ONLY_COMMANDS,
     ApprovalGate,
     ApprovalGateError,
     ApprovalRequest,
+    ControlId,
     Decision,
+    PromptReadout,
     Provenance,
+    StaleControlIdError,
     Utterance,
+    is_read_only_command,
 )
 from relay.brain.delegation import (
     ALLOWED_SPAN_KINDS,
@@ -104,6 +109,7 @@ __all__ = [
     "MAX_TOOL_OUTPUT_CHARS",
     "MAX_UTTERANCE_CHARS",
     "MIN_NARRATION_INTERVAL_S",
+    "READ_ONLY_COMMANDS",
     "RECORD_TTL_S",
     "SYSTEM_PREAMBLE",
     "TOOL_ALLOWLIST",
@@ -114,6 +120,7 @@ __all__ = [
     "ApprovalGate",
     "ApprovalGateError",
     "ApprovalRequest",
+    "ControlId",
     "Decision",
     "DelegationConfigError",
     "DelegationError",
@@ -124,8 +131,10 @@ __all__ = [
     "DelegationStateError",
     "NarrationSnapshot",
     "NarrationUpdate",
+    "PromptReadout",
     "Provenance",
     "SpokenUpdate",
+    "StaleControlIdError",
     "ToolNarrator",
     "Truncation",
     "UntrustedSpan",
@@ -139,6 +148,7 @@ __all__ = [
     "delegation_system_message",
     "document_span",
     "envelope",
+    "is_read_only_command",
     "narrate_run_completed",
     "narrate_tool_completed",
     "narrate_tool_started",
