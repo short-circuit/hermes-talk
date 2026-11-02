@@ -22,3 +22,10 @@ Every fixture is under 2 MiB, contains no personal data, and must pass the
 contract tests in `test_runs.py`: documented event names only, documented
 payload fields only, consecutive seqs, and exactly one terminal frame at the
 end.
+
+## Attachment fixtures
+
+`attachments/` holds the synthetic binaries for `relay/tests/test_attachments.py`
+(a PNG, a PDF, a WAV, a truncated PDF and a 100 MP PNG). `attachments/generate.py`
+rebuilds them deterministically and `--check` reports drift; see
+`attachments/README.md`.

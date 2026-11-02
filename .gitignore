@@ -38,6 +38,9 @@ models/
 *.wav
 *.webm
 
+# Synthetic attachment fixtures are tiny, generated, and committed on purpose.
+!relay/tests/fixtures/attachments/*.wav
+
 # Local state
 .hermes/
 data/
