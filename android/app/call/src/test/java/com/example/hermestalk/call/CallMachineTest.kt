@@ -92,6 +92,8 @@ class CallMachineTest {
                 CallEffect.AbandonAudioFocus,
                 CallEffect.StopTimer,
                 CallEffect.DisconnectAndReleaseSession,
+                CallEffect.ClearCommunicationDevice,
+                CallEffect.RestoreAudioMode,
             ),
             transition.effects,
         )
@@ -104,6 +106,7 @@ class CallMachineTest {
         assertTrue(transition.effects.contains(CallEffect.StopForegroundService))
         assertTrue(transition.effects.contains(CallEffect.DisconnectAndReleaseSession))
         assertTrue(transition.effects.contains(CallEffect.StopTimer))
+        assertTrue(transition.effects.contains(CallEffect.RestoreAudioMode))
     }
 
     @Test
@@ -412,6 +415,46 @@ class CallMachineTest {
         val ended = reduce(CallState.Ended(10), CallEvent.EndRequested)
         assertEquals(CallState.Ended(10), ended.state)
         assertTrue(ended.effects.isEmpty())
+    }
+
+    @Test
+    fun teardownDisconnectDuringEndingIsIgnored() {
+        val ending = reduce(CallState.Active, CallEvent.EndRequested)
+        val disconnected = CallMachine.reduce(
+            ui(ending.state, ending.controls),
+            CallEvent.SessionStateChanged(ConnectionState.Disconnected),
+        )
+        assertEquals(CallState.Ending, disconnected.state)
+        assertTrue(
+            "teardown must not re-run the cleanup effects",
+            disconnected.effects.isEmpty(),
+        )
+
+        val completed = CallMachine.reduce(
+            ui(disconnected.state, disconnected.controls),
+            CallEvent.EndCompleted,
+        )
+        assertEquals(CallState.Ended(0), completed.state)
+    }
+
+    @Test
+    fun sessionFailureDuringEndingIsIgnored() {
+        val ending = reduce(CallState.Active, CallEvent.EndRequested)
+        val failedConnection = CallMachine.reduce(
+            ui(ending.state, ending.controls),
+            CallEvent.SessionStateChanged(
+                ConnectionState.Failed(FailureReason.TransportClosed, "closed", false),
+            ),
+        )
+        assertEquals(CallState.Ending, failedConnection.state)
+        assertTrue(failedConnection.effects.isEmpty())
+
+        val failedEvent = CallMachine.reduce(
+            ui(ending.state, ending.controls),
+            CallEvent.SessionFailed(CallFailureReason.RelayUnreachable, "closed"),
+        )
+        assertEquals(CallState.Ending, failedEvent.state)
+        assertTrue(failedEvent.effects.isEmpty())
     }
 
     @Test

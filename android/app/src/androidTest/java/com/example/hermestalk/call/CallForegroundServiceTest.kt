@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
@@ -56,7 +57,6 @@ class CallForegroundServiceTest {
             ?: DEFAULT_SCREEN_OFF_SECONDS
         val controller = CallControllers.get(context)
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val recordingsBefore = recordingSources(audioManager)
         val relayUp = relayHealthy()
 
         ActivityScenario.launch(MainActivity::class.java).use {
@@ -90,6 +90,18 @@ class CallForegroundServiceTest {
             val actions = notification.actions ?: emptyArray()
             assertEquals("mute and end actions", 2, actions.size)
             assertTrue(actions.all { it.title.toString().isNotBlank() })
+
+            await("voice communication audio mode", AUDIO_MODE_TIMEOUT_MS) {
+                audioManager.mode == AudioManager.MODE_IN_COMMUNICATION
+            }
+            assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+            await("microphone in use", MIC_IN_USE_TIMEOUT_MS) {
+                recordingSources(audioManager).isNotEmpty()
+            }
+            assertTrue(
+                "the call is active but the microphone is not recording",
+                recordingSources(audioManager).isNotEmpty(),
+            )
 
             val heartbeatBefore = controller.heartbeat
             val device = UiDevice.getInstance(instrumentation)
@@ -128,12 +140,33 @@ class CallForegroundServiceTest {
             assertEquals(0, CallForegroundService.foregroundType())
 
             await("microphone released", MIC_RELEASE_TIMEOUT_MS) {
-                recordingSources(audioManager).size <= recordingsBefore.size
+                recordingSources(audioManager).isEmpty()
             }
             assertTrue(
                 "microphone still recording after the call ended",
-                recordingSources(audioManager).size <= recordingsBefore.size,
+                recordingSources(audioManager).isEmpty(),
             )
+            await("normal audio mode", MIC_RELEASE_TIMEOUT_MS) {
+                audioManager.mode == AudioManager.MODE_NORMAL
+            }
+            assertEquals(
+                "the voice-communication audio mode must be restored when the call ends",
+                AudioManager.MODE_NORMAL,
+                audioManager.mode,
+            )
+            // clearCommunicationDevice() drops the app's preferred device; the
+            // platform then reports its own active route, which on an emulator
+            // is the built-in speaker, so only a cleared preference is asserted.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val device = audioManager.communicationDevice
+                assertTrue(
+                    "the communication device must not still be a headset",
+                    device == null ||
+                        device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
+                        device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+                )
+            }
+            assertFalse(controller.uiState.value.controls.micActive)
         }
     }
 
@@ -224,6 +257,8 @@ class CallForegroundServiceTest {
         const val SERVICE_STOP_TIMEOUT_MS = 10_000L
         const val MIC_RELEASE_TIMEOUT_MS = 5_000L
         const val NOTIFICATION_TIMEOUT_MS = 10_000L
+        const val AUDIO_MODE_TIMEOUT_MS = 5_000L
+        const val MIC_IN_USE_TIMEOUT_MS = 10_000L
         const val POLL_INTERVAL_MS = 100L
     }
 }

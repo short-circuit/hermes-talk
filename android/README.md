@@ -138,8 +138,6 @@ a healthy `/health` response is not treated as dead.
 
 ## Deliberately not in this card
 
-- Foreground service and notification-driven call lifecycle.
-- Audio focus management.
 - Wake-word detection.
 - Attachments and upload queue.
 - STT/TTS/LLM behaviour (the stub relay sends only a tone).
@@ -190,9 +188,10 @@ The call states are `Idle`, `AwaitingMicPermission`,
 `Ending`, `Ended` and `Failed`. `Failed` carries a stable reason such as
 `MicrophonePermissionDenied`, `RelayUnreachable`, `RelayRejected`,
 `HandshakeFailed`, `AudioFocusLost` or `Unexpected`. A denied microphone
-permission fails before the service starts. Losing audio focus mutes the
-microphone without tearing down the session; a permanent focus loss also
-releases focus and marks the call failed. The service is stopped, the session is
+permission fails before the service starts. Any audio-focus loss (permanent or
+transient) mutes the microphone and clears the focus flag without tearing down
+the session or ending the call; focus is re-asserted only when the user unmutes
+or the session reconnects. The service is stopped, the session is
 disconnected, audio focus is abandoned, the communication device and audio mode
 are restored, and the timer is cancelled on every terminal transition.
 
@@ -242,13 +241,23 @@ adb shell am instrument -w \
   com.example.hermestalk.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-`CallPermissionTest` revokes `RECORD_AUDIO`, starts a call and verifies that the
-call fails with `MicrophonePermissionDenied` without starting the foreground
-service. When the relay is unreachable, `CallForegroundServiceTest` instead
-verifies that the call fails cleanly and the service is stopped.
+`CallPermissionTest` grants `RECORD_AUDIO`, starts a call and then feeds a
+denied permission result through `CallController.onMicPermissionResult` — the
+same path the activity's permission launcher takes — and verifies that the call
+fails with `MicrophonePermissionDenied`, the foreground service never keeps
+running, the audio mode is restored and the controller does not crash.
+Revoking the permission with `UiAutomation` is avoided because it kills the
+instrumented process, since the test runner lives in the app process. When the
+relay is unreachable, `CallForegroundServiceTest` instead verifies that the call
+fails cleanly and the service is stopped.
 
 Known limitations: the microphone visualiser is driven by the session's reported
 input level and the platform recording callback, not by raw PCM capture; the
 screen-off check depends on the stub relay staying reachable through `adb
 reverse`; and the notification actions require the app process to be alive,
-which the foreground service guarantees during a call.
+which the foreground service guarantees during a call. A physical headset switch
+cannot be simulated reliably on the emulator, so the "no audio drop" behaviour is
+covered at the reducer level: `AudioDevicesChanged` re-plans the route and emits
+only `ApplyAudioRoute`, never `DisconnectAndReleaseSession`, and the session is
+left connected. Plugging or unplugging a headset on a real device exercises the
+same callback through `AudioManager.registerAudioDeviceCallback`.

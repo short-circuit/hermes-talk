@@ -178,6 +178,8 @@ object CallMachine {
                     CallEffect.AbandonAudioFocus,
                     CallEffect.StopTimer,
                     CallEffect.DisconnectAndReleaseSession,
+                    CallEffect.ClearCommunicationDevice,
+                    CallEffect.RestoreAudioMode,
                 ),
             )
 
@@ -197,7 +199,7 @@ object CallMachine {
 
             is CallEvent.SessionStateChanged -> sessionStateChanged(state, controls, event)
 
-            is CallEvent.SessionFailed -> if (state.isLive) {
+            is CallEvent.SessionFailed -> if (state.canFail()) {
                 CallTransition(
                     CallState.Failed(event.reason, event.detail),
                     controls.copy(muted = true, micActive = false, audioFocusHeld = false),
@@ -343,7 +345,7 @@ object CallMachine {
             else -> CallTransition(state, controls)
         }
 
-        is ConnectionState.Reconnecting -> if (state.isLive) {
+        is ConnectionState.Reconnecting -> if (state.canFail()) {
             CallTransition(
                 CallState.Reconnecting(connection.attempt, "Relay reconnecting: ${connection.reason}"),
                 controls.copy(muted = true, micActive = false),
@@ -353,7 +355,7 @@ object CallMachine {
             CallTransition(state, controls)
         }
 
-        is ConnectionState.Disconnected -> if (state.isLive) {
+        is ConnectionState.Disconnected -> if (state.canFail()) {
             CallTransition(
                 CallState.Failed(CallFailureReason.RelayUnreachable, "Relay connection closed"),
                 controls.copy(muted = true, micActive = false, audioFocusHeld = false),
@@ -363,7 +365,7 @@ object CallMachine {
             CallTransition(state, controls)
         }
 
-        is ConnectionState.Failed -> if (state.isLive) {
+        is ConnectionState.Failed -> if (state.canFail()) {
             CallTransition(
                 CallState.Failed(mapFailure(connection.reason), connection.detail),
                 controls.copy(muted = true, micActive = false, audioFocusHeld = false),
@@ -404,6 +406,13 @@ object CallMachine {
 
         AudioFocusOutcome.Duck -> CallTransition(state, controls)
     }
+
+    /**
+     * True when a session-level failure should move the call to [CallState.Failed].
+     * [CallState.Ending] is excluded: the teardown itself reports a disconnect and
+     * that must not overwrite the ending state or re-run the cleanup effects.
+     */
+    private fun CallState.canFail(): Boolean = isLive && this !is CallState.Ending
 
     private fun mapFailure(reason: FailureReason): CallFailureReason = when (reason) {
         FailureReason.Unreachable,

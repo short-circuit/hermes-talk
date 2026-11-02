@@ -3,77 +3,72 @@ package com.example.hermestalk.call
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.rule.GrantPermissionRule
 import com.example.hermestalk.MainActivity
 import com.example.hermestalk.rtvi.RelaySettings
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
-import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Verifies that a denied microphone permission fails the call before the
- * foreground service starts and that the controller does not crash.
+ * Verifies that a microphone permission denial fails the call cleanly instead
+ * of crashing, and that the foreground service and the audio path are torn
+ * down.
+ *
+ * The denial is fed through [CallController.onMicPermissionResult], which is
+ * exactly what the activity does when the permission launcher returns false.
+ * Revoking the permission with `UiAutomation` is not used here because it kills
+ * the instrumented process (the runner lives in the app process).
  */
 @RunWith(AndroidJUnit4::class)
 class CallPermissionTest {
 
+    @get:Rule
+    val permissions: GrantPermissionRule =
+        GrantPermissionRule.grant(Manifest.permission.RECORD_AUDIO)
+
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context = instrumentation.targetContext.applicationContext
 
-    @Before
-    fun revokeMicrophonePermission() {
-        instrumentation.uiAutomation.revokeRuntimePermission(
-            context.packageName,
-            Manifest.permission.RECORD_AUDIO,
-        )
-        instrumentation.waitForIdleSync()
-        await("microphone permission to be revoked", PERMISSION_TIMEOUT_MS) {
+    @Test
+    fun deniedPermissionFailsCleanlyAndStopsTheService() {
+        val controller = CallControllers.get(context)
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        assertTrue(
+            "the microphone permission must be granted for the call to start",
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.RECORD_AUDIO,
-            ) != PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    @After
-    fun restoreMicrophonePermission() {
-        try {
-            instrumentation.uiAutomation.grantRuntimePermission(
-                context.packageName,
-                Manifest.permission.RECORD_AUDIO,
-            )
-        } catch (_: Exception) {
-            // A subsequent test can grant it again if this fails.
-        }
-    }
-
-    @Test
-    fun deniedPermissionFailsWithoutStartingTheService() {
-        val controller = CallControllers.get(context)
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
 
         ActivityScenario.launch(MainActivity::class.java).use {
             instrumentation.runOnMainSync {
                 controller.startCall(RelaySettings("http://127.0.0.1:8790", ""))
             }
-
-            val awaiting = controller.uiState.value.state
-            assertTrue(
-                "expected AwaitingMicPermission, got ${awaiting.describe()}",
-                awaiting is CallState.AwaitingMicPermission,
+            await("call to leave idle", CALL_START_TIMEOUT_MS) {
+                controller.uiState.value.state !is CallState.Idle
+            }
+            assertFalse(
+                "a granted permission must not wait for the launcher",
+                controller.uiState.value.state is CallState.AwaitingMicPermission,
             )
-            assertFalse(CallForegroundService.isRunning())
 
             instrumentation.runOnMainSync {
                 controller.onMicPermissionResult(false)
+            }
+            await("failed call", FAILURE_TIMEOUT_MS) {
+                controller.uiState.value.state is CallState.Failed
             }
 
             val state = controller.uiState.value.state
@@ -82,8 +77,16 @@ class CallPermissionTest {
                 CallFailureReason.MicrophonePermissionDenied,
                 (state as CallState.Failed).reason,
             )
+            await("service stopped", SERVICE_STOP_TIMEOUT_MS) {
+                !CallForegroundService.isRunning()
+            }
             assertFalse(CallForegroundService.isRunning())
             assertEquals(0, CallForegroundService.foregroundType())
+            assertFalse(controller.uiState.value.controls.micActive)
+            await("audio mode restored", AUDIO_RESTORE_TIMEOUT_MS) {
+                audioManager.mode == AudioManager.MODE_NORMAL
+            }
+            assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
         }
     }
 
@@ -99,7 +102,10 @@ class CallPermissionTest {
     }
 
     private companion object {
-        const val PERMISSION_TIMEOUT_MS = 5_000L
+        const val CALL_START_TIMEOUT_MS = 10_000L
+        const val FAILURE_TIMEOUT_MS = 10_000L
+        const val SERVICE_STOP_TIMEOUT_MS = 10_000L
+        const val AUDIO_RESTORE_TIMEOUT_MS = 5_000L
         const val POLL_INTERVAL_MS = 100L
     }
 }
