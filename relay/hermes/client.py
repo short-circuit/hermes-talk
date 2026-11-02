@@ -465,7 +465,7 @@ class HermesClient:
                 path,
                 json=json,
                 headers=headers,
-                timeout=request_timeout,
+                timeout=httpx.USE_CLIENT_DEFAULT if request_timeout is None else request_timeout,
             )
         except httpx.TimeoutException as exc:
             msg = "hermes request timed out"

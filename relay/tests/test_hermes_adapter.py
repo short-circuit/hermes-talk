@@ -14,9 +14,10 @@ from relay.hermes.client import (
     HermesConflictError,
     HermesProtocolError,
     HermesRunGoneError,
+    HermesTimeoutError,
 )
 from relay.hermes.events import EventGate, EventKind, HermesEventError, RunEvent
-from relay.tests._hermes_stub import HermesStub
+from relay.tests._hermes_stub import HermesStub, make_stub
 
 _API_KEY = "stub-test-key-0123456789"
 _SESSION_KEY = "voice-relay-test"
@@ -419,6 +420,36 @@ def test_swept_buffer_raises_run_gone_but_status_survives(stub: HermesStub) -> N
             await client.aclose()
 
     asyncio.run(scenario())
+
+
+def test_configured_timeout_is_enforced_on_submit_and_status() -> None:
+    stub = make_stub(submit_delay_s=0.5, get_delay_s=0.5)
+    stub.start()
+
+    async def scenario() -> None:
+        client = HermesClient(
+            stub.base_url,
+            _API_KEY,
+            timeout_s=0.1,
+            connect_timeout_s=0.1,
+        )
+        try:
+            submit_started = time.monotonic()
+            with pytest.raises(HermesTimeoutError):
+                await client.submit_run("hi")
+            assert time.monotonic() - submit_started < 0.45
+
+            status_started = time.monotonic()
+            with pytest.raises(HermesTimeoutError):
+                await client.get_run(stub.run_id)
+            assert time.monotonic() - status_started < 0.45
+        finally:
+            await client.aclose()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        stub.stop()
 
 
 def test_from_settings_builds_client_without_request() -> None:

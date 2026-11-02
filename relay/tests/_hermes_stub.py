@@ -80,6 +80,8 @@ class HermesStub:
         self.duplicate_terminal = False
         self.initial_status = "running"
         self.initial_output = ""
+        self.submit_delay_s: float = 0.0
+        self.get_delay_s: float = 0.0
         self.requests: list[dict[str, Any]] = []
         self.runs: dict[str, dict[str, Any]] = {}
         self.app = self._build_app()
@@ -164,6 +166,7 @@ class HermesStub:
         async def submit_run(request: Request) -> JSONResponse:
             if not self._authorized(request):
                 return _auth_error()
+            await asyncio.sleep(self.submit_delay_s)
             body = await request.json()
             self._record(request, body)
 
@@ -277,6 +280,7 @@ class HermesStub:
         async def get_run(run_id: str, request: Request) -> JSONResponse:
             if not self._authorized(request):
                 return _auth_error()
+            await asyncio.sleep(self.get_delay_s)
             self._record(request)
             run = self.runs.get(run_id)
             if run is None:
