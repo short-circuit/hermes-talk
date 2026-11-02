@@ -641,7 +641,8 @@ planned change, not a troubleshooting reflex.
 - Change the Caddyfile; validate and reload Caddy. A reload keeps listeners and connections.
 - Enable or reconfigure the Hermes API server (`gateway.platforms.api_server.enabled`, `API_SERVER_*`);
   this is the change that does require a gateway restart. Stage the edit, tell the owner what will
-  drop, and wait for an explicit go.
+  drop, and wait for an explicit go. Exact commands, the observed settings and a smoke test are in
+  [`ops/api-server.md`](ops/api-server.md).
 - Headless: leave a card comment with the pending change and block with `needs_input`; do not restart.
 
 After an approved restart:
@@ -684,4 +685,5 @@ its next run opens a fresh connection.
 - [`PRIVACY.md`](PRIVACY.md) — repository hygiene rules and remediation.
 - [`security/threat-model.md`](security/threat-model.md) — token handling and trust boundaries.
 - [`research/hermes-api.md`](research/hermes-api.md) — Hermes API contract used by the relay.
+- [`ops/api-server.md`](ops/api-server.md) — enabling the Hermes API server and the smoke test that proves it.
 - `.env.example` — every setting, including the conservative retention values.
