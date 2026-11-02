@@ -83,7 +83,9 @@ fun AttachmentPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                for (item in uploads) {
+                // Newest first: a just-shared file must be visible without
+                // scrolling past the history.
+                for (item in uploads.asReversed()) {
                     UploadRow(
                         item = item,
                         onRetry = { onRetryUpload(item.id) },
