@@ -297,6 +297,36 @@ def audit_approval_requested(
     )
 
 
+def audit_approval_ignored(
+    prompt_id: str,
+    execution_generation: int,
+    reason: str,
+    transcript_sha256: str | None = None,
+) -> dict[str, Any] | None:
+    """Record an echo or ambient utterance ignored without settling a prompt."""
+    return audit(
+        "approval.ignored",
+        prompt_id=prompt_id,
+        execution_generation=execution_generation,
+        reason=reason,
+        transcript_sha256=transcript_sha256,
+    )
+
+
+def audit_approval_reasked(
+    prompt_id: str,
+    execution_generation: int,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Record that a pending approval prompt must be re-asked."""
+    return audit(
+        "approval.reasked",
+        prompt_id=prompt_id,
+        execution_generation=execution_generation,
+        reason=reason,
+    )
+
+
 def audit_approval_decided(
     prompt_id: str,
     execution_generation: int,

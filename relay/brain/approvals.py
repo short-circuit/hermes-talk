@@ -5,20 +5,31 @@ model's own agreement can never satisfy an approval.  The gate defaults to
 deny, allows one pending prompt per run, binds every decision to the wire
 ``prompt_id``/``execution_generation`` pair, and audits every request and
 decision.  Provably read-only commands can be auto-approved.
+
+Denial reasons emitted by this module include ``timeout``, ``low_confidence``,
+``phrase_mismatch``, ``spoken_negation``, ``overlapping_speakers``,
+``ambiguous_phrase``, ``reask_exhausted``, ``stale_after_reask``, and
+``transport_error``.  A playback window can suppress the relay's own TTS echo
+and ambient speech captured before the readout finished.
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import shlex
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from types import MappingProxyType
 
+from relay.config import Settings
 from relay.logging import (
     audit_approval_decided,
+    audit_approval_ignored,
+    audit_approval_reasked,
     audit_approval_requested,
     transcript_hash,
 )
@@ -114,15 +125,24 @@ class Provenance(StrEnum):
 
 @dataclass(frozen=True)
 class Utterance:
-    """One utterance with its provenance and ASR confidence."""
+    """One utterance with its provenance, ASR confidence, and acoustic metadata."""
 
     text: str
     provenance: Provenance
     confidence: float = 1.0
+    onset_at: float | None = None
+    from_playback_frames: bool = False
+    speaker_count: int = 1
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
             msg = f"confidence must be between 0.0 and 1.0, got {self.confidence}"
+            raise ValueError(msg)
+        if self.speaker_count < 1:
+            msg = f"speaker_count must be at least 1, got {self.speaker_count}"
+            raise ValueError(msg)
+        if self.onset_at is not None and (not math.isfinite(self.onset_at) or self.onset_at < 0.0):
+            msg = f"onset_at must be finite and zero or greater, got {self.onset_at}"
             raise ValueError(msg)
 
 
@@ -166,6 +186,20 @@ class PromptReadout:
     command_sha256: str
     deadline_at: float
     reask: bool = False
+
+
+@dataclass
+class PlaybackWindow:
+    """The readout playback lifecycle for the current approval prompt."""
+
+    started_at: float | None = None
+    closed_at: float | None = None
+    closed_by: str | None = None
+
+    @property
+    def active(self) -> bool:
+        """Return ``True`` while playback has started and has not been closed."""
+        return self.started_at is not None and self.closed_at is None
 
 
 @dataclass(frozen=True)
@@ -216,6 +250,23 @@ class StaleControlIdError(ApprovalGateError):
         super().__init__(reason)
 
 
+class ApprovalPostError(Exception):
+    """A decision sink failed to POST a decision to the wire endpoint."""
+
+    status: int | None
+    code: str
+
+    def __init__(self, message: str, *, status: int | None = None, code: str = "") -> None:
+        self.status = status
+        self.code = code
+        super().__init__(message)
+
+    @property
+    def stale_conflict(self) -> bool:
+        """Return ``True`` for a stale 409 the caller may safely re-ask."""
+        return self.status == 409 and self.code in {"approval_not_pending", "stale_generation"}
+
+
 def _normalize_tokens(text: str) -> list[str]:
     lowered = text.lower()
     for apostrophe in _APOSTROPHES:
@@ -239,12 +290,13 @@ def _command_sha256(command: str | None) -> str:
     return hashlib.sha256(command.encode("utf-8")).hexdigest()
 
 
-def _readout(request: ApprovalRequest) -> str:
+def _readout(request: ApprovalRequest, phrase: str | None = None) -> str:
+    confirmation_phrase = phrase if phrase is not None else request.required_phrase
     if request.command is None:
-        return f"{request.action_summary}. Say {request.required_phrase} to confirm."
+        return f"{request.action_summary}. Say {confirmation_phrase} to confirm."
     return (
         f"{request.action_summary}. Running: {request.command}. "
-        f'Say "{request.required_phrase}" to confirm.'
+        f'Say "{confirmation_phrase}" to confirm.'
     )
 
 
@@ -321,6 +373,9 @@ def is_read_only_command(command: str | None) -> bool:
     return True
 
 
+_MAX_SETTLED_DECISIONS = 32
+
+
 class ApprovalGate:
     """A one-prompt-at-a-time gate that only accepts spoken confirmation."""
 
@@ -331,16 +386,54 @@ class ApprovalGate:
         audit: bool = True,
         auto_approve_read_only: bool = True,
         on_decide: Callable[[Decision], None] | None = None,
+        confirmation_phrase: str | None = None,
+        max_reasks: int = 1,
+        echo_guard: bool = True,
     ) -> None:
+        if confirmation_phrase is not None and len(_normalize_tokens(confirmation_phrase)) < 2:
+            msg = "confirmation_phrase must contain at least two tokens"
+            raise ValueError(msg)
+        if max_reasks < 0:
+            msg = "max_reasks must be zero or greater"
+            raise ValueError(msg)
         self.min_confidence = min_confidence
         self.audit = audit
         self.auto_approve_read_only = auto_approve_read_only
         self.on_decide = on_decide
+        self.confirmation_phrase = confirmation_phrase
+        self.max_reasks = max_reasks
+        self.echo_guard = echo_guard
+        self.default_timeout_s: float | None = None
         self._request: ApprovalRequest | None = None
         self._requested_at: float | None = None
         self._decision: Decision | None = None
         self.reask_count = 0
         self.post_error: str | None = None
+        self._playback = PlaybackWindow()
+        self._needs_reask = False
+        self._reask_reasons: dict[str, int] = {}
+        self._ignored_count = 0
+        self._last_ignored_reason: str | None = None
+        self._settled: dict[str, Decision] = {}
+
+    @classmethod
+    def from_settings(cls, settings: Settings, **overrides: object) -> ApprovalGate:
+        """Build a gate from :class:`Settings`, applying keyword overrides last.
+
+        ``default_timeout_s`` is exposed for callers that want to copy the
+        configured timeout into a new :class:`ApprovalRequest`.
+        """
+        kwargs: dict[str, object] = {
+            "confirmation_phrase": settings.approval_confirmation_phrase,
+            "min_confidence": settings.approval_min_confidence,
+            "max_reasks": settings.approval_max_reasks,
+            "echo_guard": settings.approval_echo_guard,
+        }
+        default_timeout_s = overrides.pop("default_timeout_s", settings.approval_timeout_s)
+        kwargs.update(overrides)
+        gate = cls(**kwargs)  # type: ignore[arg-type]
+        gate.default_timeout_s = float(default_timeout_s)
+        return gate
 
     @property
     def pending(self) -> ApprovalRequest | None:
@@ -348,6 +441,49 @@ class ApprovalGate:
         if self._decision is not None:
             return None
         return self._request
+
+    @property
+    def playback_window(self) -> PlaybackWindow:
+        """Return a copy of the current readout playback window."""
+        return replace(self._playback)
+
+    @property
+    def playback_closed_at(self) -> float | None:
+        """Return the time the current playback window closed, if it has closed."""
+        return self._playback.closed_at
+
+    @property
+    def needs_reask(self) -> bool:
+        """Return ``True`` when the last attempt must be re-asked."""
+        return self._needs_reask and self._decision is None
+
+    @property
+    def ignored_count(self) -> int:
+        """Return the number of echo or ambient utterances ignored this prompt."""
+        return self._ignored_count
+
+    @property
+    def last_ignored_reason(self) -> str | None:
+        """Return the reason for the most recently ignored utterance."""
+        return self._last_ignored_reason
+
+    @property
+    def reask_reasons(self) -> Mapping[str, int]:
+        """Return a read-only copy of per-reason re-ask counters."""
+        return MappingProxyType(dict(self._reask_reasons))
+
+    def decision_for(
+        self, prompt_id: str, execution_generation: int | None = None
+    ) -> Decision | None:
+        """Return a settled decision from the bounded replay registry."""
+        decision = self._settled.get(prompt_id)
+        if decision is None:
+            return None
+        if execution_generation is not None and (
+            decision.execution_generation != execution_generation
+        ):
+            return None
+        return decision
 
     def _should_auto_approve(self, request: ApprovalRequest) -> bool:
         if not self.auto_approve_read_only:
@@ -357,6 +493,9 @@ class ApprovalGate:
         if request.read_only is not None:
             return request.read_only
         return is_read_only_command(request.command)
+
+    def _effective_phrase(self, request: ApprovalRequest) -> str:
+        return self.confirmation_phrase or request.required_phrase
 
     def request(
         self, request: ApprovalRequest, *, now: float | None = None
@@ -371,11 +510,18 @@ class ApprovalGate:
         self._decision = None
         self.reask_count = 0
         self.post_error = None
+        self._playback = PlaybackWindow()
+        self._needs_reask = False
+        self._reask_reasons.clear()
+        self._ignored_count = 0
+        self._last_ignored_reason = None
         if self.audit:
             audit_approval_requested(
                 prompt_id=request.prompt_id,
                 execution_generation=request.execution_generation,
-                transcript_sha256=transcript_hash(_readout(request)),
+                transcript_sha256=transcript_hash(
+                    _readout(request, self._effective_phrase(request))
+                ),
                 tool=request.tool,
                 summary=request.action_summary,
                 command_sha256=_command_sha256(request.command),
@@ -388,9 +534,8 @@ class ApprovalGate:
                 execution_generation=request.execution_generation,
                 command_sha256=_command_sha256(request.command),
             )
-            self._decision = decision
-            self._post(decision, utterance_text=None)
-            return decision
+            settled = self._settle(decision, utterance_text=None)
+            return settled if settled is not None else request
         return request
 
     def readout(self, *, now: float | None = None) -> PromptReadout:
@@ -405,7 +550,7 @@ class ApprovalGate:
             msg = "approval request has no timestamp"
             raise ApprovalGateError(msg)
         return PromptReadout(
-            text=_readout(request),
+            text=_readout(request, self._effective_phrase(request)),
             prompt_id=request.prompt_id,
             execution_generation=request.execution_generation,
             command=request.command,
@@ -418,6 +563,30 @@ class ApprovalGate:
         """Return a re-ask readout without extending the original deadline."""
         readout = self.readout(now=now)
         return replace(readout, text=f"I didn't catch that. {readout.text}", reask=True)
+
+    def playback_started(self, *, now: float | None = None) -> None:
+        """Record that the readout TTS started; no-op without a pending prompt."""
+        if self.pending is None:
+            return
+        current = time.monotonic() if now is None else now
+        self._playback = PlaybackWindow(started_at=current)
+
+    def playback_finished(self, *, now: float | None = None) -> None:
+        """Close an open playback window because the readout finished."""
+        if not self._playback.active:
+            return
+        current = time.monotonic() if now is None else now
+        self._playback.closed_at = current
+        self._playback.closed_by = "finished"
+
+    def barge_in(self, *, now: float | None = None, onset_at: float | None = None) -> None:
+        """Close an open playback window at the interrupting speech onset."""
+        if not self._playback.active:
+            return
+        current = time.monotonic() if now is None else now
+        cut_at = min(onset_at, current) if onset_at is not None else current
+        self._playback.closed_at = cut_at
+        self._playback.closed_by = "barge_in"
 
     @staticmethod
     def _received_control(
@@ -442,6 +611,30 @@ class ApprovalGate:
             and received.execution_generation == decision.execution_generation
         )
 
+    def _record_reask(self, reason: str) -> int:
+        self.reask_count += 1
+        count = self._reask_reasons.get(reason, 0) + 1
+        self._reask_reasons[reason] = count
+        return count
+
+    def _latest_settled_control(self) -> ControlId | None:
+        if not self._settled:
+            return None
+        latest = next(reversed(self._settled.values()))
+        return ControlId(latest.prompt_id, latest.execution_generation)
+
+    def _ignore(self, request: ApprovalRequest, reason: str, utterance: Utterance) -> None:
+        self._ignored_count += 1
+        self._last_ignored_reason = reason
+        if self.audit:
+            audit_approval_ignored(
+                prompt_id=request.prompt_id,
+                execution_generation=request.execution_generation,
+                reason=reason,
+                transcript_sha256=transcript_hash(utterance.text),
+            )
+        return None
+
     def answer(
         self,
         utterance: Utterance,
@@ -461,28 +654,32 @@ class ApprovalGate:
             pending = self.pending
             if pending is not None:
                 expected = pending.control_id
+                reason: str | None = None
                 if received.prompt_id != expected.prompt_id:
-                    self.reask_count += 1
-                    raise StaleControlIdError(
-                        "prompt_mismatch", expected=expected, received=received
-                    )
-                if received.execution_generation != expected.execution_generation:
-                    self.reask_count += 1
-                    raise StaleControlIdError(
-                        "stale_generation", expected=expected, received=received
-                    )
+                    reason = "prompt_mismatch"
+                elif received.execution_generation != expected.execution_generation:
+                    reason = "stale_generation"
+                if reason is not None:
+                    count = self._record_reask(reason)
+                    if count > self.max_reasks:
+                        decision = Decision(
+                            approved=False,
+                            reason="reask_exhausted",
+                            prompt_id=pending.prompt_id,
+                            execution_generation=pending.execution_generation,
+                            command_sha256=_command_sha256(pending.command),
+                        )
+                        settled = self._settle(decision, utterance_text=utterance.text)
+                        return settled if settled is not None else self._decision
+                    self._needs_reask = True
+                    raise StaleControlIdError(reason, expected=expected, received=received)
             else:
-                settled = self._decision
+                settled = self._settled.get(received.prompt_id)
                 if settled is not None and self._matches_decision(received, settled):
                     return None
-                expected = (
-                    ControlId(settled.prompt_id, settled.execution_generation)
-                    if settled is not None
-                    else None
-                )
                 raise StaleControlIdError(
                     "approval_not_pending",
-                    expected=expected,
+                    expected=self._latest_settled_control(),
                     received=received,
                 )
         if self._decision is not None:
@@ -496,40 +693,40 @@ class ApprovalGate:
             return expired
         if utterance.provenance != Provenance.SPOKEN:
             return None
+        if self.echo_guard and self._playback.started_at is not None:
+            if utterance.from_playback_frames:
+                return self._ignore(request, "playback_frames", utterance)
+            if self._playback.active:
+                return self._ignore(request, "playback_active", utterance)
+            closed_at = self._playback.closed_at
+            if closed_at is not None:
+                if utterance.onset_at is None:
+                    return self._ignore(request, "onset_unknown", utterance)
+                if utterance.onset_at < closed_at:
+                    return self._ignore(request, "onset_before_playback_end", utterance)
         if utterance.confidence < self.min_confidence:
+            return self._deny(request, "low_confidence", utterance_text=utterance.text)
+        if utterance.speaker_count > 1:
+            return self._deny(request, "overlapping_speakers", utterance_text=utterance.text)
+        phrase_tokens = _normalize_tokens(self._effective_phrase(request))
+        if len(phrase_tokens) < 2:
+            return self._deny(request, "ambiguous_phrase", utterance_text=utterance.text)
+        tokens = _normalize_tokens(utterance.text)
+        negation = any(token in _NEGATION_TOKENS for token in tokens)
+        phrase_match = _contains_token_sequence(tokens, phrase_tokens)
+        if phrase_match and not negation:
             decision = Decision(
-                approved=False,
-                reason="low_confidence",
+                approved=True,
+                reason="spoken_phrase",
                 prompt_id=request.prompt_id,
                 execution_generation=request.execution_generation,
                 command_sha256=_command_sha256(request.command),
             )
-            self._decision = decision
-            self._post(decision, utterance_text=utterance.text)
-            return decision
-        tokens = _normalize_tokens(utterance.text)
-        phrase_tokens = _normalize_tokens(request.required_phrase)
-        negation = any(token in _NEGATION_TOKENS for token in tokens)
-        phrase_match = _contains_token_sequence(tokens, phrase_tokens)
-        if phrase_match and not negation:
-            approved = True
-            reason = "spoken_phrase"
         elif negation:
-            approved = False
-            reason = "spoken_negation"
+            return self._deny(request, "spoken_negation", utterance_text=utterance.text)
         else:
-            approved = False
-            reason = "phrase_mismatch"
-        decision = Decision(
-            approved=approved,
-            reason=reason,
-            prompt_id=request.prompt_id,
-            execution_generation=request.execution_generation,
-            command_sha256=_command_sha256(request.command),
-        )
-        self._decision = decision
-        self._post(decision, utterance_text=utterance.text)
-        return decision
+            return self._deny(request, "phrase_mismatch", utterance_text=utterance.text)
+        return self._settle(decision, utterance_text=utterance.text)
 
     def expire(self, *, now: float | None = None) -> Decision | None:
         """Deny a pending prompt once its timeout has passed."""
@@ -543,40 +740,120 @@ class ApprovalGate:
         deadline = requested_at + request.timeout_s
         if current <= deadline:
             return None
+        return self._deny(request, "timeout", utterance_text=None)
+
+    def _deny(
+        self, request: ApprovalRequest, reason: str, *, utterance_text: str | None
+    ) -> Decision | None:
         decision = Decision(
             approved=False,
-            reason="timeout",
+            reason=reason,
             prompt_id=request.prompt_id,
             execution_generation=request.execution_generation,
             command_sha256=_command_sha256(request.command),
         )
-        self._decision = decision
-        self._post(decision, utterance_text=None)
-        return decision
+        return self._settle(decision, utterance_text=utterance_text)
 
-    def _post(self, decision: Decision, *, utterance_text: str | None) -> None:
-        if self.audit:
-            if decision.reason == "timeout":
-                audit_decision = "timeout"
-            else:
-                audit_decision = "approved" if decision.approved else "denied"
-            audit_approval_decided(
-                prompt_id=decision.prompt_id,
-                execution_generation=decision.execution_generation,
-                decision=audit_decision,
-                transcript_sha256=(
-                    transcript_hash(utterance_text) if utterance_text is not None else None
-                ),
-                actor="spoken_gate",
-                reason=decision.reason,
-                command_sha256=decision.command_sha256,
-            )
-        if self.on_decide is None:
+    def _register_settled(self, decision: Decision) -> None:
+        self._settled.pop(decision.prompt_id, None)
+        self._settled[decision.prompt_id] = decision
+        while len(self._settled) > _MAX_SETTLED_DECISIONS:
+            oldest = next(iter(self._settled))
+            del self._settled[oldest]
+
+    def _drop_settled(self, prompt_id: str) -> None:
+        self._settled.pop(prompt_id, None)
+
+    def _audit_decision(self, decision: Decision, *, utterance_text: str | None) -> None:
+        if not self.audit:
             return
+        if decision.reason == "timeout":
+            audit_decision = "timeout"
+        else:
+            audit_decision = "approved" if decision.approved else "denied"
+        audit_approval_decided(
+            prompt_id=decision.prompt_id,
+            execution_generation=decision.execution_generation,
+            decision=audit_decision,
+            transcript_sha256=(
+                transcript_hash(utterance_text) if utterance_text is not None else None
+            ),
+            actor="spoken_gate",
+            reason=decision.reason,
+            command_sha256=decision.command_sha256,
+        )
+
+    def _try_post(self, decision: Decision) -> str | None:
+        if self.on_decide is None:
+            return None
         try:
             self.on_decide(decision)
         except Exception as exc:
+            return str(exc)
+        return None
+
+    def _settle(self, decision: Decision, *, utterance_text: str | None) -> Decision | None:
+        self._decision = decision
+        self._register_settled(decision)
+        self._needs_reask = False
+        if self.on_decide is None:
+            self._audit_decision(decision, utterance_text=utterance_text)
+            return decision
+        try:
+            self.on_decide(decision)
+        except ApprovalPostError as exc:
             self.post_error = str(exc)
+            if exc.stale_conflict:
+                if decision.approved:
+                    count = self._record_reask(exc.code)
+                    if count <= self.max_reasks:
+                        self._decision = None
+                        self._drop_settled(decision.prompt_id)
+                        self._needs_reask = True
+                        if self.audit:
+                            audit_approval_reasked(
+                                prompt_id=decision.prompt_id,
+                                execution_generation=decision.execution_generation,
+                                reason=exc.code,
+                            )
+                        return None
+                deny = Decision(
+                    approved=False,
+                    reason="stale_after_reask" if decision.approved else decision.reason,
+                    prompt_id=decision.prompt_id,
+                    execution_generation=decision.execution_generation,
+                    command_sha256=decision.command_sha256,
+                )
+                self._decision = deny
+                self._register_settled(deny)
+                error = self._try_post(deny)
+                if error is not None:
+                    self.post_error = error
+                self._audit_decision(deny, utterance_text=utterance_text)
+                return deny
+            if decision.approved:
+                deny = Decision(
+                    approved=False,
+                    reason="transport_error",
+                    prompt_id=decision.prompt_id,
+                    execution_generation=decision.execution_generation,
+                    command_sha256=decision.command_sha256,
+                )
+                self._decision = deny
+                self._register_settled(deny)
+                error = self._try_post(deny)
+                if error is not None:
+                    self.post_error = error
+                self._audit_decision(deny, utterance_text=utterance_text)
+                return deny
+            self._audit_decision(decision, utterance_text=utterance_text)
+            return decision
+        except Exception as exc:
+            self.post_error = str(exc)
+            self._audit_decision(decision, utterance_text=utterance_text)
+            return decision
+        self._audit_decision(decision, utterance_text=utterance_text)
+        return decision
 
     def decision(self) -> Decision | None:
         """Return the recorded decision, or ``None`` while undecided."""
@@ -587,9 +864,11 @@ __all__ = [
     "READ_ONLY_COMMANDS",
     "ApprovalGate",
     "ApprovalGateError",
+    "ApprovalPostError",
     "ApprovalRequest",
     "ControlId",
     "Decision",
+    "PlaybackWindow",
     "PromptReadout",
     "Provenance",
     "StaleControlIdError",

@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     audit_max_age_days: int = 90
     audit_max_bytes: int = 5242880
     audit_backup_count: int = 10
+    approval_confirmation_phrase: str = "yes run it"
+    approval_min_confidence: float = 0.6
+    approval_max_reasks: int = 1
+    approval_echo_guard: bool = True
+    approval_timeout_s: float = 20.0
     record_audio: bool = False
     shutdown_timeout_seconds: float = 10.0
     max_concurrent_sessions: int = 3
@@ -165,6 +170,46 @@ class Settings(BaseSettings):
                 return False
         msg = "record_audio must be one of 1/0, true/false, yes/no, on/off"
         raise ValueError(msg)
+
+    @field_validator("approval_min_confidence")
+    @classmethod
+    def _validate_approval_min_confidence(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            msg = "approval_min_confidence must be finite and between 0.0 and 1.0"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("approval_max_reasks")
+    @classmethod
+    def _validate_approval_max_reasks(cls, value: int) -> int:
+        if value < 0:
+            msg = "approval_max_reasks must be zero or greater"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("approval_echo_guard", mode="before")
+    @classmethod
+    def _validate_approval_echo_guard(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        msg = "approval_echo_guard must be one of 1/0, true/false, yes/no, on/off"
+        raise ValueError(msg)
+
+    @field_validator("approval_timeout_s")
+    @classmethod
+    def _validate_approval_timeout_s(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            msg = "approval_timeout_s must be finite and greater than zero"
+            raise ValueError(msg)
+        return value
 
     @field_validator("shutdown_timeout_seconds")
     @classmethod
