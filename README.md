@@ -39,7 +39,7 @@ needs tools, files, memory, or actions to Hermes, narrating progress while the a
 |---|---|
 | `relay/` | Python voice relay: WebRTC transport, speech pipeline, Hermes adapter |
 | `android/` | Kotlin/Compose client |
-| `docs/` | Architecture, ADRs, privacy model, testing, deployment |
+| `docs/` | Architecture, ADRs, privacy model, testing, deployment, API reference |
 | `scripts/` | Repo hygiene checks, kanban seed script |
 
 ## Local-only invariant

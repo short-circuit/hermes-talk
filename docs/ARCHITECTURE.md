@@ -10,7 +10,8 @@ extend the relay without breaking the Hermes contract.
 Related documents: `docs/adr/0001-local-only.md`, `docs/adr/0002-transport.md`,
 `docs/research/hermes-api.md` (observed gateway behaviour, section numbers cited below),
 `docs/security/threat-model.md` (T-ids), `docs/DEPLOYMENT.md` (ports, health gate, rollback),
-`docs/RUNBOOK.md` (operations), `docs/PRIVACY.md` (data flow and repository hygiene rules).
+`docs/RUNBOOK.md` (operations), `docs/PRIVACY.md` (data flow and repository hygiene rules),
+`docs/API.md` (HTTP and RTVI surface, error codes, limits).
 
 ## 1. Components
 
