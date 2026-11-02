@@ -72,6 +72,7 @@ class HermesStub:
         self.foreign_sessions: set[str] = set()
         self.events_gone = False
         self.drop_after_seq: int | None = None
+        self.abort_after_seq: int | None = None
         self.emit_keepalive_every_s: float | None = None
         self.hold_open = False
         self.malformed_frame = False
@@ -218,6 +219,9 @@ class HermesStub:
                         and resume < self.drop_after_seq
                         and seq > self.drop_after_seq
                     ):
+                        if not self.hold_open:
+                            run["status"] = "completed"
+                            run["output"] = "Linux"
                         return
 
                     data = frame["data"]
@@ -226,6 +230,8 @@ class HermesStub:
 
                     yield self._sse(frame)
                     emitted = max(emitted, seq)
+                    if self.abort_after_seq == seq:
+                        raise RuntimeError("stub abort")
                     if self.resend_seq == seq and not resent:
                         yield self._sse(frame)
                         resent = True

@@ -173,6 +173,79 @@ def test_dropped_stream_reconnects_from_last_seq(stub: HermesStub) -> None:
     asyncio.run(scenario())
 
 
+def test_abrupt_stream_abort_reconnects_and_yields_terminal_once(stub: HermesStub) -> None:
+    stub.abort_after_seq = 1
+
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            admission = await client.submit_run("abort mid-stream")
+            events = await _collect(client.events(admission.run_id))
+
+            assert [event.seq for event in events] == [0, 1, 2, 3]
+            assert sum(1 for event in events if event.terminal) == 1
+
+            event_requests = [
+                request
+                for request in stub.requests
+                if request["path"] == f"/v1/runs/{admission.run_id}/events"
+            ]
+            assert len(event_requests) >= 2
+            assert event_requests[1]["last_event_id"] == "1"
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_status_fallback_when_stream_ends_without_terminal(stub: HermesStub) -> None:
+    stub.drop_after_seq = 1
+    stub.hold_open = False
+
+    async def scenario() -> None:
+        client = _client(stub, max_reconnects=0)
+        try:
+            admission = await client.submit_run("fall back to status")
+            events = await _collect(client.events(admission.run_id))
+
+            assert [event.seq for event in events] == [0, 1, 2]
+            assert sum(1 for event in events if event.terminal) == 1
+            assert events[-1].kind is EventKind.RUN_COMPLETED
+            assert events[-1].output == "Linux"
+
+            status_requests = [
+                request
+                for request in stub.requests
+                if request["method"] == "GET" and request["path"] == f"/v1/runs/{admission.run_id}"
+            ]
+            assert len(status_requests) == 1
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_gate_run_id_mismatch_becomes_protocol_error(stub: HermesStub) -> None:
+    frame = stub.make_frame("message.delta", 0, delta="hi")
+    frame["data"]["run_id"] = "run_other"
+    stub.frames = [frame]
+
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            admission = await client.submit_run("foreign run id")
+            with pytest.raises(HermesProtocolError) as raised:
+                async for _event in client.events(admission.run_id):
+                    pass
+
+            assert str(raised.value).startswith("run stream contract violation")
+            assert "run_other" in str(raised.value)
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_gate_drops_duplicates_and_post_terminal_events() -> None:
     run_id = "run_gate"
     gate = EventGate(run_id)

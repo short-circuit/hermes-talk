@@ -390,7 +390,7 @@ class HermesClient:
                         event = self._decode_frame(frame)
                         if event is None:
                             continue
-                        if gate.observe(event):
+                        if self._observe(gate, event):
                             yield event
                             if event.terminal:
                                 return
@@ -398,7 +398,7 @@ class HermesClient:
                     frame = decoder.flush()
                     if frame is not None:
                         event = self._decode_frame(frame)
-                        if event is not None and gate.observe(event):
+                        if event is not None and self._observe(gate, event):
                             yield event
                             if event.terminal:
                                 return
@@ -422,8 +422,16 @@ class HermesClient:
             raise HermesStreamError(msg)
 
         event = self._synthetic_terminal(gate, status, terminal)
-        if gate.observe(event):
+        if self._observe(gate, event):
             yield event
+
+    @staticmethod
+    def _observe(gate: EventGate, event: RunEvent) -> bool:
+        try:
+            return gate.observe(event)
+        except HermesEventError as exc:
+            msg = f"run stream contract violation: {exc}"
+            raise HermesProtocolError(msg) from exc
 
     def _headers(
         self,
