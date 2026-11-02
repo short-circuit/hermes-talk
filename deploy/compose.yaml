@@ -75,7 +75,11 @@ services:
       - ${HERMES_TALK_MODELS:-./models}:/models:ro
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      # `exec` is required: phonemizer copies libespeak-ng.so into a temporary
+      # directory under /tmp and dlopen() maps it. A noexec /tmp (the Docker
+      # default for tmpfs) fails every TTS synthesis with
+      # "failed to map segment from shared object".
+      - /tmp:size=64m,mode=1777,exec
     cap_drop:
       - ALL
     security_opt:

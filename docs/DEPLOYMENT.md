@@ -62,7 +62,7 @@ into an image.
 
 ```
 cd deploy
-cp .env.example .env
+cp ../.env.example .env
 chmod 600 .env
 $EDITOR .env
 ```

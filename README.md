@@ -52,7 +52,7 @@ must function on an isolated LAN. See `docs/PRIVACY.md` and `docs/adr/0001-local
 Requires Python 3.11+, Docker, JDK 17, and Android SDK.
 
 ```bash
-cp .env.example .env          # fill in endpoints and a device token
+cp .env.example deploy/.env     # fill in endpoints and a device token
 docker compose -f deploy/compose.yaml up -d
 cd android && ./gradlew assembleDebug
 ```
