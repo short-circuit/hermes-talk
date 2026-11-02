@@ -255,12 +255,14 @@ PY
 ```
 
 Expected output: `stt=sherpa tts_warmup_ms=<number>` (or `stt=whisper` when configured). The number is
-host-specific; a few hundred milliseconds is normal. An onnxruntime warning about failing to persist a
-telemetry device id is harmless under the read-only root filesystem. The first call without warm-up
-pays roughly the same cost again, which can exceed the first-audio target. A `SpeechModelUnavailable`
-error means a model path is wrong or a file is missing; fix the path in `.env` and restart the relay.
-`failed to map segment from shared object` means the container's `/tmp` is mounted `noexec`; the relay
-needs `exec` there because phonemizer maps a shared library from a temporary directory.
+host-specific; a few hundred milliseconds is normal. The relay does not call `warmup()` during startup,
+so run this once after a relay restart and before the first call. An onnxruntime warning about failing
+to persist a telemetry device id is harmless under the read-only root filesystem. The first call
+without warm-up pays roughly the same cost again, which can exceed the first-audio target. A
+`SpeechModelUnavailable` error means a model path is wrong or a file is missing; fix the path in `.env`
+and restart the relay. `failed to map segment from shared object` means the container's `/tmp` is
+mounted `noexec`; the relay needs `exec` there because phonemizer maps a shared library from a
+temporary directory.
 
 ### Voice brain
 

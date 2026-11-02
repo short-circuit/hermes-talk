@@ -258,7 +258,18 @@ class RtviSession(
     }
 
     private fun ensureClient(): PipecatClientSmallWebRTC? {
-        client?.let { return it }
+        val existing = client
+        if (existing != null) {
+            val existingState = existing.state
+            if (
+                existingState == TransportState.Initialized ||
+                existingState == TransportState.Disconnected
+            ) {
+                return existing
+            }
+            callbacks.onLog("replacing stale client in state $existingState")
+            releaseClientInternal()
+        }
         return try {
             val transport = SmallWebRTCTransport(appContext)
             val options = PipecatClientOptions(
@@ -293,6 +304,9 @@ class RtviSession(
         _state.value = transition.state
         callbacks.onStateChanged(transition.state)
         syncWatchdog(transition.state)
+        if (transition.state is ConnectionState.Failed) {
+            releaseClientInternal()
+        }
         for (effect in transition.effects) {
             when (effect) {
                 ConnectionEffect.ReleaseClient -> releaseClientInternal()
