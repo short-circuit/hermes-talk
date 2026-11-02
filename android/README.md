@@ -12,6 +12,8 @@ screen plus a visible connection state machine.
 - `wakeword` — on-device sherpa-onnx keyword spotting for “Hey Hermes”, the
   false-trigger log and push-to-talk fallback. See
   [`wakeword/README.md`](wakeword/README.md).
+- `attachments` — share-target ingest, durable upload queue, relay artifact
+  listing/download and the attachment Compose panel.
 - `stub-relay` — Python `aiortc` test fixture that implements the RTVI
   signalling surface used by the app.
 
@@ -27,8 +29,11 @@ cd android
 ```
 
 `./gradlew test` runs the JVM unit tests for endpoint validation, settings
-validation, probe mapping and the connection state machine. No emulator or
-device is required.
+validation, probe mapping, the connection state machine, the call lifecycle,
+wake-word policy and the attachment queue. The attachment tests use a real
+`com.sun.net.httpserver.HttpServer` bound to loopback, so they exercise HTTP
+framing, retries and checksum verification without an emulator. No device is
+required.
 
 ## Run the stub relay
 
@@ -177,9 +182,96 @@ files directory and logs the summary under the `WakeWordUsage` tag. See
 [`wakeword/README.md`](wakeword/README.md) for the model provenance, tuning,
 sensitivity presets and the false-trigger log.
 
+## Attachments and relay artifacts
+
+The `:attachments` module (namespace
+`com.example.hermestalk.attachments`) adds two related flows. It reuses the
+`RelaySettings`, `RelayEndpoint`, `TlsTrust`, `SpkiPin` and `tlsPolicy()`
+types from `:rtvi`, so uploads and downloads obey exactly the same HTTPS
+pinning rules as the connection probe. The token is sent only as
+`Authorization: Bearer` and is never logged.
+
+### Sharing files into the app
+
+`MainActivity` is the share target for `ACTION_SEND` and
+`ACTION_SEND_MULTIPLE` with any MIME type and uses `launchMode="singleTop"`;
+a new share while the activity is alive arrives through `onNewIntent` instead
+of creating a second activity. The parser accepts `EXTRA_STREAM`, clip-data
+URIs and a `content://`/`file://` URI in `EXTRA_TEXT`, ignores duplicates and
+rejects blank URIs.
+
+Each shared file is copied into the app's private storage before it is queued:
+`filesDir/attachments/queue/<id>/payload.bin`. The display name is reduced to a
+safe basename. If the name has no extension, a canonical extension derived from
+the declared MIME type is appended (for example `image/png` → `.png`) so the
+relay's `extension_matches` check accepts the upload. A single payload is
+capped at 50 MiB and an empty file is rejected. The document picker uses
+`ACTION_OPEN_DOCUMENT` and persists the read grant where the provider allows it.
+
+### Durable upload queue
+
+The queue index is `filesDir/attachments/queue/index.json`. Writes go to a
+temporary file in the same directory, are fsynced and moved into place with
+`ATOMIC_MOVE` where the filesystem supports it. A corrupt index is quarantined
+as `index.corrupt-<timestamp>.json` and replaced by an empty queue instead of
+crashing. Completed records are pruned to the newest 20; unfinished records and
+their payloads survive process death and are resumed on the next app start.
+
+Uploads are sequential and single-flight. Each is a multipart `POST
+/v1/attachments` with field name `file`, a 15 s connect timeout and a 60 s read
+timeout. Progress is reported to the UI about every 32 KiB. The payload is
+deleted only after a 201 response; a terminal rejection keeps it so the user can
+retry, and an explicit cancel removes it.
+
+Retryable failures (transport errors, timeouts, HTTP 5xx) use a bounded
+schedule of 1, 2, 5, 10, 20, 30 and 60 seconds with at most 8 attempts. A relay
+`Retry-After` value is honoured as a floor and never shortens the delay. Terminal
+rejections (400, 401, 403, 409, 413, 415 and 422) are not retried automatically.
+A connectivity callback wakes the worker immediately when the network returns;
+queued work also resumes when the app is restarted.
+
+### Artifact listing and download
+
+`GET /v1/artifacts?limit=50` populates the panel. `GET /v1/artifacts/{id}` is
+requested with each path segment of the id percent-encoded, written to
+`cacheDir/artifacts/`, and verified against the relay's
+`X-Artifact-SHA256` header (falling back to the listed checksum). A mismatch
+deletes the partial file and reports an error. A verified file is exposed
+through the FileProvider and opened with an installed viewer via
+`ACTION_VIEW`.
+
+The manifest declares `androidx.core.content.FileProvider` with authority
+`${applicationId}.fileprovider`; `res/xml/file_paths.xml` exposes only
+`cache/artifacts/` and `files/attachments/`. The provider is not exported and
+grants read permission per URI.
+
+### UI and test tags
+
+The panel appears on both the connection screen and the in-call screen. It
+exposes `attachment_pick`, `attachment_upload_item`, `attachment_progress`,
+`attachment_retry`, `attachment_cancel`, `artifact_refresh`, `artifact_item`,
+`artifact_download`, `artifact_open` and `attachment_error`.
+
+The JVM tests live in `attachments/src/test` and cover share parsing, name
+sanitisation, ingest limits and hashing, multipart framing and 201 handling,
+retry transitions (503 → 201 and terminal 415), mid-body close, the retry
+schedule and `Retry-After` floor, queue persistence, corruption quarantine,
+pruning, resume, artifact JSON and URL encoding, 404 handling, checksum
+verification and the controller's retry budget:
+
+```sh
+cd android
+./gradlew :attachments:test
+```
+
+Known limitations: uploads are sequential rather than parallel; a payload whose
+bytes change on disk between ingest and upload is rejected instead of re-hashed;
+the artifact panel does not paginate beyond the relay's `limit=50` response; and
+opening a downloaded artifact depends on a viewer being installed for its MIME
+type.
+
 ## Deliberately not in this card
 
-- Attachments and upload queue.
 - STT/TTS/LLM behaviour (the stub relay sends only a tone).
 
 ## CI gate
