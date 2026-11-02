@@ -1,0 +1,3 @@
+{"id": 0, "data": {"event": "tool.started", "run_id": "run_fixture00000000000000000000000007", "timestamp": 1793611500.1200001, "tool": "terminal", "preview": "rm -rf /tmp/hermes-talk-fixture-dir", "tool_call_id": "call_186747da8cd53c5efa2b6fa6", "seq": 0}}
+{"id": 1, "data": {"event": "tool.started", "run_id": "run_fixture00000000000000000000000007", "timestamp": 1793611500.3200001, "tool": "read_file", "preview": "", "tool_call_id": "call_186747da8cd53c5efa2b6fb7", "seq": 1}}
+{"id": 2, "data": {"event": "run.failed", "run_id": "run_fixture00000000000000000000000007", "timestamp": 1793611503.3650925, "error": "The turn did not complete.\nUse /retry to try again.", "completed": false, "partial": false, "interrupted": false, "seq": 2}}
