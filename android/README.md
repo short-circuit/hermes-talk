@@ -285,6 +285,14 @@ cd android
 ./gradlew test
 ```
 
+The `android (emulator instrumentation)` workflow job boots an API 34 emulator
+and runs `:app:connectedDebugAndroidTest` with `androidx.test.filters.LargeTest`
+excluded (the wake-word battery run) and the screen-off call window shortened. It
+starts `android/stub-relay/relay.py` and forwards port 8790 so the end-to-end
+flow can reach the fixture; the retry, token-expiry and call-state tests need
+only their in-process loopback server (see
+[Regression instrumentation suite](#regression-instrumentation-suite)).
+
 ## In-call audio, foreground service and screen-off survival
 
 The in-call feature lives in the `:app:call` Gradle module
@@ -393,3 +401,65 @@ covered at the reducer level: `AudioDevicesChanged` re-plans the route and emits
 only `ApplyAudioRoute`, never `DisconnectAndReleaseSession`, and the session is
 left connected. Plugging or unplugging a headset on a real device exercises the
 same callback through `AudioManager.registerAudioDeviceCallback`.
+
+### Regression instrumentation suite
+
+`android/app/src/androidTest` carries the client regression suite. Every test
+binds loopback only; nothing depends on a LAN address and no personal data is
+committed.
+
+- `call/CallStateTest` starts a call against a closed loopback port and verifies
+  that the call fails with `RelayUnreachable` and that the foreground service,
+  the microphone and the audio mode are released. It also checks that mute and
+  end are ignored while no call is live. A call fails on the first unreachable
+  probe by design: cleanup is the call-level contract, and the retry budget
+  belongs to the connection screen.
+- `call/CallPermissionTest` covers the denied microphone permission (see above)
+  and `call/CallScreenTest` renders the permission card, so a denial produces a
+  visible state rather than a crash.
+- `attachments/UploadRetryTest` drives the real `UploadQueueController` and
+  `HttpUploadEngine` against an in-process HTTP fixture: two 503 responses then
+  a 201 with the 1 s and 2 s backoff observed, a terminal 401 that keeps the
+  payload for a manual retry, and a persisted upload that resumes after a
+  process restart.
+- `attachments/TokenExpiryTest` exercises an expired bearer credential on the
+  liveness probe, the session handshake, the upload engine and the artifact
+  client. Every surface must fail as `Unauthorized` without retrying and without
+  leaking the token into the UI detail.
+- `support/LoopbackStubRelay` is the fixture those tests use. It is a small
+  HTTP/1.1 server on `127.0.0.1` inside the app process, with scripted upload
+  statuses, a bearer-token check, artifact listing and download, and a request
+  log. Because it needs no host relay and no `adb reverse`, these tests run on a
+  bare emulator in CI.
+- `e2e/StubRelayFlowTest` drives the real activity through Compose test tags:
+  it seeds the encrypted settings store, connects to the Python stub relay,
+  waits for `Ready`, starts a call, toggles mute, ends the call and checks that
+  the service and audio mode are released. It also covers the expired-token
+  screen. The relay-backed test skips with a clear message when
+  `127.0.0.1:8790` does not answer, so a local run without the fixture stays
+  green.
+
+The settings screen exposes `settings_relay_url`, `settings_token` and
+`settings_connect` for these flows.
+
+Run the self-contained subset (no host relay, suitable for CI):
+
+```sh
+cd android
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.example.hermestalk.attachments.UploadRetryTest,com.example.hermestalk.attachments.TokenExpiryTest,com.example.hermestalk.call.CallStateTest
+```
+
+Run the full suite, including the relay-backed flow, with shortened long tests:
+
+```sh
+adb reverse tcp:8790 tcp:8790
+.venv/bin/python android/stub-relay/relay.py --port 8790
+cd android
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.screenOffSeconds=15 \
+  -Pandroid.testInstrumentationRunnerArguments.wakeWordBatteryMinutes=1
+```
+
+`@LargeTest` marks the wake-word battery run, which defaults to 60 minutes; CI
+excludes that annotation and shortens the screen-off call window instead.

@@ -37,6 +37,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -104,7 +105,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = relayUrl,
                 onValueChange = { relayUrl = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_relay_url"),
                 label = { Text(stringResource(R.string.relay_url_label)) },
                 supportingText = {
                     Text(
@@ -120,7 +123,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = token,
                 onValueChange = { token = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_token"),
                 label = { Text(stringResource(R.string.device_token_label)) },
                 supportingText = {
                     Text(
@@ -373,7 +378,9 @@ fun SettingsScreen(
                 }
                 Button(
                     onClick = { onConnect(relayUrl, token, tlsPin, trustPlatformCa) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("settings_connect"),
                 ) {
                     Text(stringResource(R.string.connect))
                 }
