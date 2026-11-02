@@ -188,8 +188,8 @@ The `:attachments` module (namespace
 `com.example.hermestalk.attachments`) adds two related flows. It reuses the
 `RelaySettings`, `RelayEndpoint`, `TlsTrust`, `SpkiPin` and `tlsPolicy()`
 types from `:rtvi`, so uploads and downloads obey exactly the same HTTPS
-pinning rules as the connection probe. The token is sent only as
-`Authorization: Bearer` and is never logged.
+pinning rules as the connection probe. The token is sent only in the
+`Authorization: Bearer <token>` header and is never logged.
 
 ### Sharing files into the app
 
