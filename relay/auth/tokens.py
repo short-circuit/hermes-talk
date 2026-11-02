@@ -262,7 +262,13 @@ class TokenStore:
         label: str | None = None,
         token_id: str | None = None,
     ) -> DeviceToken:
-        """Revoke a device token and return its metadata."""
+        """Revoke a device token and return its metadata.
+
+        ``revoke(label=...)`` targets the most recently issued active record for
+        that label when one exists; if every matching record is already revoked,
+        it returns an already-revoked match unchanged (idempotent).
+        ``revoke(token_id=...)`` of an already revoked id is likewise idempotent.
+        """
 
         def mutate(records: list[_StoredRecord]) -> tuple[list[_StoredRecord], Any]:
             target = self._select(records, label=label, token_id=token_id)
@@ -417,7 +423,9 @@ class TokenStore:
         token_id: str | None,
     ) -> _StoredRecord:
         matches = self._select_many(records, label=label, token_id=token_id, active_only=False)
-        return matches[0]
+        active = [record for record in matches if record.token.active]
+        # Active matches win so a revoke-by-label cannot miss the post-rotation successor.
+        return active[-1] if active else matches[0]
 
     def _select_many(
         self,

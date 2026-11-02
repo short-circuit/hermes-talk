@@ -225,6 +225,52 @@ def test_rotate_is_atomic_and_revokes_the_predecessor(
     assert leftovers == []
 
 
+def test_revoke_label_targets_active_successor_after_rotation(
+    tmp_path: pathlib.Path,
+) -> None:
+    store = TokenStore(_state_path(tmp_path))
+    _, predecessor = store.issue("phone")
+    successor_token, successor = store.rotate(label="phone")
+
+    revoked = store.revoke(label="phone")
+
+    assert revoked.token_id == successor.token_id
+    assert revoked.revoked_at is not None
+    assert store.verify(successor_token) is None
+    assert [record for record in store.active_tokens() if record.label == "phone"] == []
+    stored_predecessor = next(
+        record for record in store.all_tokens() if record.token_id == predecessor.token_id
+    )
+    assert stored_predecessor.revoked_at is not None
+
+
+def test_revoke_fully_revoked_label_is_idempotent(
+    tmp_path: pathlib.Path,
+) -> None:
+    store = TokenStore(_state_path(tmp_path))
+    _, predecessor = store.issue("phone")
+    store.rotate(label="phone")
+    store.revoke(label="phone")
+
+    again = store.revoke(label="phone")
+
+    assert again.token_id == predecessor.token_id
+    assert again.revoked_at is not None
+
+
+def test_revoke_already_revoked_id_is_idempotent(
+    tmp_path: pathlib.Path,
+) -> None:
+    store = TokenStore(_state_path(tmp_path))
+    _, predecessor = store.issue("phone")
+    store.rotate(label="phone")
+
+    again = store.revoke(token_id=predecessor.token_id)
+
+    assert again.token_id == predecessor.token_id
+    assert again.revoked_at is not None
+
+
 def test_failed_replace_leaves_previous_state_intact(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -300,9 +346,9 @@ def test_audit_lines_are_structured_and_never_contain_tokens(
 
     first, first_record = store.issue("phone")
     second, second_record = store.rotate(label="phone")
-    store.revoke(label="phone")
     store.verify("not-a-token")
     store.verify(generate_token())
+    store.revoke(label="phone")
 
     audit_records = [record for record in caplog.records if record.name == "relay.audit"]
     events = [record.__dict__["event"] for record in audit_records]
@@ -531,6 +577,25 @@ def test_cli_issue_list_revoke_and_rotate(tmp_path: pathlib.Path) -> None:
     verified = store.verify(successor)
     assert verified is not None
     assert verified.label == "tablet"
+
+
+def test_cli_revoke_label_targets_active_successor_after_rotation(
+    tmp_path: pathlib.Path,
+) -> None:
+    env = _cli_env(tmp_path)
+
+    issued = _run_cli(["issue", "--label", "phone"], env)
+    assert issued.returncode == 0, issued.stderr
+
+    rotated = _run_cli(["rotate", "--label", "phone"], env)
+    assert rotated.returncode == 0, rotated.stderr
+    successor = rotated.stdout.splitlines()[0].strip()
+    successor_id = token_id_for(successor)
+
+    revoked = _run_cli(["revoke", "--label", "phone"], env)
+    assert revoked.returncode == 0, revoked.stderr
+    assert revoked.stdout.strip() == f"revoked label=phone token_id={successor_id}"
+    assert TokenStore(tmp_path / DEFAULT_STATE_FILENAME).verify(successor) is None
 
 
 def test_cli_requires_data_dir_or_state_path(tmp_path: pathlib.Path) -> None:

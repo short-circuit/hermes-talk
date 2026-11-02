@@ -334,9 +334,10 @@ python -m relay.tokens revoke --id <token-id>
 ```
 
 `list` prints `token_id`, label, issue time, and `active` or `revoked`. Revoke the active id when a
-device is lost. **Use `--id` after a rotation:** `revoke --label` selects the first matching record,
-which can be the already-revoked predecessor, so the command reports success without revoking the
-current token. Copy the active id from `list`.
+device is lost. After a rotation, `revoke --label` targets the most recently issued active record for
+that label, so it revokes the current token rather than the already-revoked predecessor. Revoking by
+explicit `--id` from `list` stays the safest habit because it is unambiguous, and re-revoking an
+already-revoked id is a no-op that exits 0.
 
 Revocation is immediate and needs no restart. Audit entries `auth.issue`, `auth.rotate`, and
 `auth.revoke` are appended to `$DATA_DIR/audit.log`; the plaintext token never appears there.
