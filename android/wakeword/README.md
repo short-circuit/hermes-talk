@@ -137,12 +137,38 @@ Balanced preset:
 | 33-utterance synthesized set (clean, 1 m quiet-room, low-gain) | 33/33 detected |
 | 10 on-device fixture positives | 10/10 detected |
 | 3 on-device fixture negatives | 0/3 false hits |
-| false triggers per hour | pending |
-| battery drain per hour | pending |
+| false triggers per hour | 0 per hour |
+| battery drain per hour | 83.9 s CPU/h (2.3% of one core) |
 
-The instrumented runs fill in the pending rows. The battery test writes
-`usage.json` to the app files directory and logs the same numbers under the
-`WakeWordUsage` logcat tag.
+Detection rate above 90% and fewer than one false trigger per hour hold at the
+Balanced preset. Details of how each row was produced:
+
+- **Detection rate.** 33 utterances of "Hey Hermes" synthesized locally with
+  Kokoro across 11 voices and 3 phrasings, replayed through the exact model and
+  tuning: 33/33 at clean, 1 m quiet-room (30 dB SNR) and low-gain levels. The
+  10 committed fixture WAVs are the same construction, attenuated and mixed
+  with a noise floor, and the on-device instrumentation test detects all 10.
+  A live human speaker was not available to the headless run; the 1 m distance
+  is modelled as gain loss plus a quiet-room noise floor.
+- **False triggers.** 3,600.4 s (1.0 h) of continuous non-wake-word speech -
+  60 texts from the repository's reply, opener and voice-router corpora, 28
+  Kokoro voices, 3 speaking rates, 30 dB SNR noise floor, fed in 100 ms chunks
+  like the capture loop - produced 0 hits. Three sensitivity settings were also
+  checked over 1,756 s each: 0 hits at threshold 0.15, 0.20 and 0.25.
+- **Battery.** `WakeWordBatteryTest` ran 60 minutes of continuous listening on
+  the API 34 x86_64 emulator: `listening_wall_ms=3600029`,
+  `cpu_ms=83860`, `detection_count=0` (silent emulator microphone), and the
+  capture thread and `AudioRecord` were released cleanly afterwards. That is
+  83.9 s of process CPU time per hour, or 2.3% of one core. The emulator's
+  power model reports no drain, so energy is derived rather than measured in
+  mAh: at 1.0 W for a fully loaded core the CPU cost is about 6 mAh/h, and the
+  audio-input wakelock that stays held for the whole window adds an estimated
+  5-11 mAh/h at 20-40 mW. That is roughly 11-17 mAh per hour, or 0.4-0.6% of a
+  3,000 mAh battery. Treat it as an order-of-magnitude figure; a phone with a
+  low-power audio DSP will do better, a heavily loaded one worse.
+
+The battery test writes `usage.json` to the app files directory and logs the
+same numbers under the `WakeWordUsage` logcat tag.
 
 ## Instrumentation
 
