@@ -3,41 +3,35 @@
 Python service that owns the WebRTC leg, the local speech pipeline, the voice-brain model, and the Hermes
 adapter.
 
-Current layout (service shell):
+Current layout:
 
 ```
 relay/
   __init__.py       # package version
-  app.py            # FastAPI app: lifespan, correlation ids, /health, /ready
+  app.py            # FastAPI app: lifespan, correlation ids, probes, session reaper
   config.py         # typed settings loaded from the environment
-  logging/          # structured logging, redaction, audit, retention, audio debug
-    __init__.py     # public re-export surface
-    core.py         # formatters, configure_logging, access log
-    redact.py       # secret/path redaction and logging.Filter
-    audit.py        # append-only audit trail
-    retention.py    # age/size pruning and rotation policy
-    prune.py        # python -m relay.logging.prune CLI
-    audio.py        # optional WAV debug recording and log-safe summaries
+  limits.py         # admission control, upload leases, token buckets, barge-in gate
+  tokens.py         # python -m relay.tokens CLI
+  api/              # HTTP routers: attachment upload, artifact listing/download
   auth/             # device tokens, hash-at-rest store, FastAPI auth dependency
-  storage/          # attachment inbox and confined artifact outbox
-  brain/            # prompts, provenance envelopes, approval gate, narration
-  api/              # HTTP routers (attachment upload, artifact listing/download)
-  tests/            # in-process ASGI tests
+  brain/            # router, prompts, tool schemas, delegation, approvals, narration
+  hermes/           # runs/SSE adapter: submit, events, status, stop
+  logging/          # structured logging, redaction, audit, retention, audio debug
+  maintenance/      # retention pruning and Hermes session deletion
+  speech/           # STT, TTS, PCM/Opus helpers, backpressure
+  storage/          # attachment inbox, validation probe, confined artifact outbox
+  transport/        # turn detection, VAD, barge-in, interruption markers
+  tests/            # offline suites and replay fixtures
   pyproject.toml    # package metadata and tooling config
   Dockerfile        # python:3.12-slim, non-root runtime
   hermes-talk.service  # systemd unit stub (deploy/ is canonical)
   README.md
 ```
 
-Planned submodules (future tasks):
-
-```
-  transport/        # SmallWebRTC offer/answer, audio frames
-  speech/           # VAD, STT, TTS adapters
-  brain/            # LFM tool router, prompts, tool schemas
-  hermes/           # runs/SSE adapter, approvals, stop
-  storage/          # inbox/outbox, validation
-```
+The app currently serves the probe and file-transfer surface. `transport/`, `speech/`, `brain/` and
+`hermes/` are shipped libraries that the call loop composes; the WebRTC signalling endpoint is served
+by `android/stub-relay/` for client tests until it is mounted here. See `docs/ARCHITECTURE.md` for the
+component map, data flow and trust boundaries.
 
 Nothing in this module may call the internet at runtime.
 
