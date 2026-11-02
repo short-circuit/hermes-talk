@@ -7,7 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -290,13 +291,23 @@ fun ConnectionScreen(
                             .fillMaxWidth()
                             .testTag("push_to_talk")
                             .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = {
-                                        onPushToTalkPressed()
-                                        tryAwaitRelease()
-                                        onPushToTalkReleased()
-                                    },
-                                )
+                                // Button installs its own clickable, which consumes
+                                // the down event. Observe the raw gesture instead of
+                                // detectTapGestures so press/release still reaches
+                                // push-to-talk.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    onPushToTalkPressed()
+                                    var pressed = true
+                                    while (pressed) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull {
+                                            it.id == down.id
+                                        }
+                                        pressed = change?.pressed == true
+                                    }
+                                    onPushToTalkReleased()
+                                }
                             },
                     ) {
                         Text(stringResource(R.string.wake_word_hold_to_talk))

@@ -78,6 +78,7 @@ class AttachmentsController(
     /** Parse an ACTION_SEND / ACTION_SEND_MULTIPLE intent and queue every file. */
     fun attachFromIntent(intent: Intent, settings: RelaySettings) {
         ensureStarted(settings)
+        _artifactState.update { it.copy(error = null) }
         val files = ShareIntent.read(intent)
         if (files.isEmpty()) {
             _artifactState.update { it.copy(error = "No file was shared.") }
@@ -91,6 +92,7 @@ class AttachmentsController(
     /** Queue one document-picker URI. */
     fun pickAttachment(uri: Uri, settings: RelaySettings) {
         ensureStarted(settings)
+        _artifactState.update { it.copy(error = null) }
         runCatching {
             appContext.contentResolver.takePersistableUriPermission(
                 uri,
@@ -220,13 +222,16 @@ class AttachmentsController(
                 _artifactState.update { it.copy(error = "The phone could not read that file.") }
                 return@launch
             }
-            withContext(Dispatchers.IO) {
+            val item = withContext(Dispatchers.IO) {
                 queueController.ingestAndEnqueue(
                     source = stream,
                     displayName = resolvedName,
                     mimeType = resolvedMime,
                     settings = settings,
                 )
+            }
+            if (item != null) {
+                _artifactState.update { it.copy(error = null) }
             }
         }
     }

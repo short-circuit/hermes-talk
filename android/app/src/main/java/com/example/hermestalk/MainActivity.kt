@@ -229,7 +229,10 @@ private fun AppRoot(
             onWakeWordToggle = setWakeWordEnabled,
             onWakeWordSensitivity = viewModel::setWakeWordSensitivity,
             onPushToTalkPressed = viewModel::pushToTalkPressed,
-            onPushToTalkReleased = viewModel::pushToTalkReleased,
+            onPushToTalkReleased = {
+                viewModel.pushToTalkReleased()
+                onNavigate(AppScreen.Call)
+            },
         )
 
         AppScreen.Call -> CallScreen(
