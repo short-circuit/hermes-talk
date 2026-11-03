@@ -14,7 +14,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -176,6 +176,55 @@ def _optional_generation(body: Mapping[str, Any], field: str) -> int | None:
     return value
 
 
+def _validated_input(value: object) -> str | list[dict[str, object]]:
+    """Validate a run input and normalise a content array to plain objects.
+
+    A string is passed through unchanged.  A sequence is validated part by part
+    before any request is made: only ``text`` and ``image_url`` parts with the
+    documented value shapes are accepted, while unknown extra keys survive so
+    the gateway can ignore them.  Errors name the offending part index rather
+    than echoing payload bytes.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        msg = "input must be a string or a non-empty sequence of content parts"
+        raise HermesConfigError(msg)
+    if not isinstance(value, Sequence):
+        msg = "input must be a string or a non-empty sequence of content parts"
+        raise HermesConfigError(msg)
+    if not value:
+        msg = "input content array must not be empty"
+        raise HermesConfigError(msg)
+
+    parts: list[dict[str, object]] = []
+    for index, part in enumerate(value):
+        if not isinstance(part, Mapping):
+            msg = f"input part {index} must be an object"
+            raise HermesConfigError(msg)
+        kind = part.get("type")
+        if kind == "text":
+            if not isinstance(part.get("text"), str):
+                msg = f"input part {index} of type 'text' must have a string 'text'"
+                raise HermesConfigError(msg)
+            parts.append(dict(part))
+        elif kind == "image_url":
+            image = part.get("image_url")
+            if not isinstance(image, Mapping):
+                msg = f"input part {index} of type 'image_url' must have an 'image_url' object"
+                raise HermesConfigError(msg)
+            if not isinstance(image.get("url"), str):
+                msg = f"input part {index} of type 'image_url' must have a string 'url'"
+                raise HermesConfigError(msg)
+            normalized = dict(part)
+            normalized["image_url"] = dict(image)
+            parts.append(normalized)
+        else:
+            msg = f"input part {index} has an unsupported 'type'"
+            raise HermesConfigError(msg)
+    return parts
+
+
 class HermesClient:
     """Drive one Hermes turn at a time against a loopback gateway."""
 
@@ -265,17 +314,18 @@ class HermesClient:
 
     async def submit_run(
         self,
-        input: str,
+        input: str | Sequence[Mapping[str, object]],
         *,
         session_id: str | None = None,
         session_key: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunAdmission:
         """Submit one turn and return the gateway admission."""
+        validated_input = _validated_input(input)
         effective_session_key = _validated_session_key(
             session_key if session_key is not None else self._session_key
         )
-        body: dict[str, Any] = {"input": input}
+        body: dict[str, Any] = {"input": validated_input}
         if session_id is not None:
             body["session_id"] = session_id
 

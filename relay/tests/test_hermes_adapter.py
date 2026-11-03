@@ -11,6 +11,7 @@ from relay.config import Settings
 from relay.hermes.client import (
     HermesAuthError,
     HermesClient,
+    HermesConfigError,
     HermesConflictError,
     HermesProtocolError,
     HermesRunGoneError,
@@ -108,6 +109,132 @@ def test_submit_run_sends_session_and_idempotency_headers(stub: HermesStub) -> N
             assert recorded[0]["json"]["session_id"] == "session-from-client"
             assert recorded[0]["headers"]["x-hermes-session-key"] == _SESSION_KEY
             assert recorded[0]["headers"]["idempotency-key"] == "idem-test-1"
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_submit_run_sends_validated_content_array(stub: HermesStub) -> None:
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            await client.submit_run(
+                [
+                    {"type": "text", "text": "hi"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AAAA"},
+                    },
+                ]
+            )
+
+            recorded = [
+                request
+                for request in stub.requests
+                if request["method"] == "POST" and request["path"] == "/v1/runs"
+            ]
+            assert len(recorded) == 1
+            assert recorded[0]["json"] == {
+                "input": [
+                    {"type": "text", "text": "hi"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AAAA"},
+                    },
+                ]
+            }
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_submit_run_preserves_unknown_part_keys(stub: HermesStub) -> None:
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            parts = [
+                {"type": "text", "text": "hi", "note": "keep"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA", "detail": "high"},
+                    "cache": True,
+                },
+            ]
+            await client.submit_run(parts)
+
+            recorded = [
+                request
+                for request in stub.requests
+                if request["method"] == "POST" and request["path"] == "/v1/runs"
+            ]
+            assert len(recorded) == 1
+            assert recorded[0]["json"] == {"input": parts}
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_submit_run_rejects_empty_content_array_before_any_request(
+    stub: HermesStub,
+) -> None:
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            with pytest.raises(HermesConfigError):
+                await client.submit_run([])
+            assert stub.requests == []
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        ["hi"],
+        [{"type": "audio", "data": "x"}],
+        [{"type": "text", "text": 123}],
+        [{"type": "text"}],
+        [{"type": "image_url", "image_url": {}}],
+        [{"type": "image_url", "image_url": {"url": 123}}],
+        [{"type": "image_url", "image_url": "data:image/png;base64,AAAA"}],
+        b"hi",
+        bytearray(b"hi"),
+    ],
+)
+def test_submit_run_rejects_invalid_content_array_before_any_request(
+    stub: HermesStub,
+    parts: object,
+) -> None:
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            with pytest.raises(HermesConfigError):
+                await client.submit_run(parts)  # type: ignore[arg-type]
+            assert stub.requests == []
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_submit_run_sends_plain_string_unchanged(stub: HermesStub) -> None:
+    async def scenario() -> None:
+        client = _client(stub)
+        try:
+            await client.submit_run("Use the terminal tool to run uname -s")
+
+            recorded = [
+                request
+                for request in stub.requests
+                if request["method"] == "POST" and request["path"] == "/v1/runs"
+            ]
+            assert len(recorded) == 1
+            assert recorded[0]["json"] == {"input": "Use the terminal tool to run uname -s"}
         finally:
             await client.aclose()
 

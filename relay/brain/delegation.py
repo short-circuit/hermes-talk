@@ -38,7 +38,7 @@ from relay.brain.prompts import (
 )
 from relay.hermes.client import HermesError, HermesNotFoundError
 from relay.hermes.events import EventKind
-from relay.storage.inbox import Attachment, InboxStore, sanitize_filename
+from relay.storage.inbox import Attachment, InboxError, InboxStore, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,9 @@ class DelegationService:
         idempotency_key: str | None = None,
         session_id: str | None = None,
         session_key: str | None = None,
+        attachments: Sequence[Attachment] | None = None,
+        store: InboxStore | None = None,
+        excerpts: Mapping[str, str] | None = None,
     ) -> DelegationHandle:
         """Submit one instruction and return an acknowledgement immediately."""
         started = time.perf_counter()
@@ -432,6 +435,11 @@ class DelegationService:
         else:
             key = _validated_key(idempotency_key)
 
+        attachment_list = list(attachments) if attachments is not None else []
+        has_attachments = bool(attachment_list)
+        if has_attachments and store is None:
+            msg = "attachments require an inbox store"
+            raise DelegationConfigError(msg)
         effective_session_id = session_id if session_id is not None else self._session_id
         effective_session_key = session_key if session_key is not None else self._session_key
 
@@ -462,9 +470,37 @@ class DelegationService:
             self._register(record)
             self._prune()
 
+            submit_input: str | list[dict[str, object]] = text
+            # The early guard above rejects attachments without a store.
+            if has_attachments and store is not None:
+                try:
+                    submit_input = delegation_input(
+                        text,
+                        attachment_list,
+                        store,
+                        excerpts=excerpts,
+                    )
+                except InboxError as exc:
+                    record.state = DelegationState.FAILED
+                    record.failure = _exception_failure(exc)
+                    record.enqueue_ms = (time.perf_counter() - started) * 1000.0
+                    logger.warning(
+                        "delegation %s attachment failed (%s)",
+                        record.delegation_id,
+                        type(exc).__name__,
+                    )
+                    self._schedule_delivery(
+                        record,
+                        DelegationState.FAILED,
+                        "failure",
+                        delegation_failure(),
+                        failure=record.failure,
+                    )
+                    return self._handle(record)
+
             try:
                 admission = await self._client.submit_run(
-                    text,
+                    submit_input,
                     session_id=effective_session_id,
                     session_key=effective_session_key,
                     idempotency_key=key,

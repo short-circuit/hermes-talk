@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 from relay.brain.delegation import (
     DELEGATION_CANCELLED_PHRASES,
     DELEGATION_FAILURE_PHRASES,
@@ -21,6 +25,7 @@ from relay.brain.delegation import (
     delegation_cancelled,
     delegation_failure,
 )
+from relay.config import Settings
 from relay.hermes import (
     EventKind,
     HermesAuthError,
@@ -34,6 +39,8 @@ from relay.hermes import (
     RunEvent,
     StopResult,
 )
+from relay.storage.inbox import InboxStore
+from relay.tests import media_fixtures
 from relay.tests._hermes_stub import HermesStub
 
 _API_KEY = "stub-test-key-0123456789"
@@ -61,6 +68,58 @@ def _completed_events(run_id: str) -> list[RunEvent]:
     return [_event(EventKind.RUN_COMPLETED, run_id=run_id, output="Linux")]
 
 
+class _BytesStream:
+    """An async byte source over in-memory attachment bytes."""
+
+    def __init__(self, data: bytes, chunk_size: int = 8192) -> None:
+        self._data = data
+        self._offset = 0
+        self._chunk_size = chunk_size
+
+    async def read(self, size: int = -1) -> bytes:
+        if self._offset >= len(self._data):
+            return b""
+        remaining = len(self._data) - self._offset
+        wanted = remaining if size < 0 else min(size, remaining)
+        wanted = min(wanted, self._chunk_size)
+        end = self._offset + wanted
+        chunk = self._data[self._offset : end]
+        self._offset = end
+        return chunk
+
+
+def _png_bytes(width: int = 4, height: int = 4) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (12, 34, 56)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(_env_file=None, inbox_dir=tmp_path / "inbox")
+
+
+def _run_requests(stub: HermesStub) -> list[dict[str, Any]]:
+    return [
+        request
+        for request in stub.requests
+        if request["method"] == "POST" and request["path"] == "/v1/runs"
+    ]
+
+
+def _hermes_client(stub: HermesStub) -> HermesClient:
+    return HermesClient(
+        stub.base_url,
+        _API_KEY,
+        session_key=_SESSION_KEY,
+        timeout_s=2.0,
+        connect_timeout_s=1.0,
+        stop_timeout_s=2.0,
+        stream_timeout_s=2.0,
+        reconnect_backoff_s=0.01,
+        max_reconnect_backoff_s=0.05,
+    )
+
+
 class FakeHermesClient:
     """Scripted HermesClient double with explicit stream release gates."""
 
@@ -84,7 +143,7 @@ class FakeHermesClient:
 
     async def submit_run(
         self,
-        input: str,
+        input: str | Sequence[Mapping[str, object]],
         *,
         session_id: str | None = None,
         session_key: str | None = None,
@@ -1020,8 +1079,181 @@ def test_end_to_end_with_real_client_and_stub(stub: HermesStub) -> None:
             assert submits[0]["json"]["session_id"] == "session-e2e"
             assert submits[0]["headers"]["idempotency-key"] == "e2e-key"
             assert submits[0]["headers"]["x-hermes-session-key"] == _SESSION_KEY
+            assert isinstance(submits[0]["json"]["input"], str)
+            assert submits[0]["json"]["input"] == "Use the terminal tool to run uname -s"
         finally:
             await service.aclose()
             await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_delegate_with_image_attachment_submits_content_array(
+    stub: HermesStub,
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store = InboxStore(_settings(tmp_path))
+        attachment = await store.ingest(
+            filename="photo.png",
+            declared_content_type="image/png",
+            stream=_BytesStream(_png_bytes()),
+        )
+        client = _hermes_client(stub)
+        sink = RecordingSink()
+        service = DelegationService(client, sink, session_id="session-attach")
+        try:
+            handle = await service.delegate(
+                "Look at this photo",
+                attachments=[attachment],
+                store=store,
+                idempotency_key="image-attachment",
+            )
+            assert handle.run_id == stub.run_id
+
+            snapshot = await service.wait(handle.delegation_id, timeout_s=5.0)
+            assert snapshot.state is DelegationState.COMPLETED
+            assert snapshot.deliveries == 1
+            assert len(sink.updates) == 1
+            assert sink.updates[0].kind == "answer"
+
+            submits = _run_requests(stub)
+            assert len(submits) == 1
+            parts = submits[0]["json"]["input"]
+            assert isinstance(parts, list)
+            assert len(parts) == 3
+            assert parts[0] == {"type": "text", "text": "Look at this photo"}
+
+            attachment_text = parts[1]
+            assert attachment_text["type"] == "text"
+            assert f"path={attachment.path}" in attachment_text["text"]
+            assert f"sha256={attachment.sha256}" in attachment_text["text"]
+
+            expected_url = "data:image/png;base64," + base64.b64encode(
+                attachment.path.read_bytes()
+            ).decode("ascii")
+            assert parts[2] == {
+                "type": "image_url",
+                "image_url": {"url": expected_url},
+            }
+            assert sum(1 for part in parts if part["type"] == "image_url") == 1
+        finally:
+            await service.aclose()
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_delegate_with_pdf_attachment_submits_text_part_only(
+    stub: HermesStub,
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store = InboxStore(_settings(tmp_path))
+        attachment = await store.ingest(
+            filename="report.pdf",
+            declared_content_type="application/pdf",
+            stream=_BytesStream(media_fixtures.build_pdf()),
+        )
+        client = _hermes_client(stub)
+        sink = RecordingSink()
+        service = DelegationService(client, sink)
+        try:
+            handle = await service.delegate(
+                "Read this report",
+                attachments=[attachment],
+                store=store,
+                idempotency_key="pdf-attachment",
+            )
+            assert handle.run_id == stub.run_id
+
+            snapshot = await service.wait(handle.delegation_id, timeout_s=5.0)
+            assert snapshot.state is DelegationState.COMPLETED
+            assert snapshot.deliveries == 1
+            assert len(sink.updates) == 1
+            assert sink.updates[0].kind == "answer"
+
+            submits = _run_requests(stub)
+            assert len(submits) == 1
+            parts = submits[0]["json"]["input"]
+            assert isinstance(parts, list)
+            assert len(parts) == 2
+            assert parts[0] == {"type": "text", "text": "Read this report"}
+
+            attachment_text = parts[1]
+            assert attachment_text["type"] == "text"
+            assert f"path={attachment.path}" in attachment_text["text"]
+            assert f"sha256={attachment.sha256}" in attachment_text["text"]
+            assert all(part["type"] != "image_url" for part in parts)
+        finally:
+            await service.aclose()
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_delegate_with_tampered_attachment_fails_without_submit(
+    stub: HermesStub,
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store = InboxStore(_settings(tmp_path))
+        attachment = await store.ingest(
+            filename="photo.png",
+            declared_content_type="image/png",
+            stream=_BytesStream(_png_bytes()),
+        )
+        attachment.path.write_bytes(attachment.path.read_bytes() + b"\x00")
+
+        client = _hermes_client(stub)
+        sink = RecordingSink()
+        service = DelegationService(client, sink)
+        try:
+            handle = await service.delegate(
+                "Look at this photo",
+                attachments=[attachment],
+                store=store,
+                idempotency_key="tampered-attachment",
+            )
+            assert handle.state is DelegationState.FAILED
+            assert handle.run_id is None
+            assert handle.failure == "attachment_changed"
+
+            snapshot = await service.wait(handle.delegation_id, timeout_s=2.0)
+            assert snapshot.state is DelegationState.FAILED
+            assert snapshot.failure == "attachment_changed"
+            assert snapshot.deliveries == 1
+            assert len(sink.updates) == 1
+            assert sink.updates[0].kind == "failure"
+            assert sink.updates[0].text == delegation_failure()
+            assert _run_requests(stub) == []
+        finally:
+            await service.aclose()
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_attachments_without_store_raise_config_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = InboxStore(_settings(tmp_path))
+        attachment = await store.ingest(
+            filename="photo.png",
+            declared_content_type="image/png",
+            stream=_BytesStream(_png_bytes()),
+        )
+        client = FakeHermesClient()
+        sink = RecordingSink()
+        service = DelegationService(client, sink)
+        try:
+            with pytest.raises(DelegationConfigError):
+                await service.delegate(
+                    "Look at this photo",
+                    attachments=[attachment],
+                )
+            assert client.submissions == []
+            assert sink.updates == []
+        finally:
+            await service.aclose()
 
     asyncio.run(scenario())

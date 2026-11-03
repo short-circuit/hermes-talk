@@ -232,9 +232,12 @@ Ordering guarantees that the code relies on:
    relay/storage/inbox.py delegation_parts verifies the stored hash before every hand-off
 ```
 
-`DelegationService.delegate()` currently submits a plain string instruction. `delegation_input()`
-builds the content array for `POST /v1/runs` and is exercised by the attachment and injection suites;
-passing that array through the delegation service is a separate change.
+`DelegationService.delegate()` submits the `delegation_input()` content array to `POST /v1/runs`
+when attachments are supplied: a text part per attachment with its path, hash, MIME type, size and
+name, an inline `image_url` data URL for images, and an optional untrusted excerpt envelope. With no
+attachments it submits a plain string instruction. `delegation_parts` re-verifies the stored sha256
+before every hand-off; if the bytes no longer match, the delegation fails with the spoken failure and
+nothing is submitted to the gateway.
 
 ### 3.3 Artifact download
 
