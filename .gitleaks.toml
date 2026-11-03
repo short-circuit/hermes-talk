@@ -1,0 +1,23 @@
+# gitleaks configuration for the CI secrets job, the pre-commit hook and local
+# full-history scans.
+#
+# The default ruleset stays in force. The allowlist below exists because
+# documentation examples, test fixtures and the Hermes probe script contain
+# synthetic placeholders that the `curl-auth-header` and `generic-api-key` rules
+# report as secrets: a curl example with an `Authorization:` header, an
+# identifier such as `HERMES_API_KEY`, or an `Idempotency-Key:` header whose
+# value is a fixture string.
+#
+# The allowlist is path-scoped, so a real secret anywhere else still fails the
+# scan. `scripts/check_repo_hygiene.sh` rule R4 independently rejects
+# secret-shaped values in the work tree, including inside these paths.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic placeholders in documentation, test fixtures and the Hermes probe script"
+paths = [
+    '''^docs/''',
+    '''^relay/tests/''',
+    '''^scripts/probe_hermes_api\.sh$''',
+]

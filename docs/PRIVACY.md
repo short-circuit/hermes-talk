@@ -41,7 +41,13 @@ The script scans tracked files **and** untracked files that are not gitignored, 
 ### Rules enforced by gitleaks
 
 CI runs `gitleaks/gitleaks-action` with `fetch-depth: 0` on every push and every pull request, so the scan
-covers the full history rather than the current tree. Pre-commit runs the gitleaks hook against the staged
+covers the full history rather than the current tree. The repository ships `.gitleaks.toml`, which keeps
+the default ruleset and allowlists three paths — `docs/`, `relay/tests/` and
+`scripts/probe_hermes_api.sh` — because their curl examples and fixtures carry synthetic placeholders (an
+`Authorization:` header in a curl line, an `Idempotency-Key:` fixture, an identifier such as
+`HERMES_API_KEY`) that the `curl-auth-header` and `generic-api-key` rules report as secrets. The allowlist
+is path-scoped: a real secret anywhere else still fails the scan, and rule R4 above independently checks
+those paths in the work tree. Pre-commit runs the gitleaks hook against the staged
 index only; `pre-commit run --all-files` is therefore *not* a history scan. To check history locally:
 
 ```bash

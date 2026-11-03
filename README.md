@@ -4,7 +4,10 @@ Local-only, hands-free voice control plane for [Hermes Agent](https://github.com
 Talk to your agent from an Android phone, interrupt it mid-answer, approve or deny tool calls by voice,
 and send files in either direction — with no cloud speech, LLM, or TTS dependency at runtime.
 
-**Status:** pre-alpha. Architecture and backlog are defined; implementation starts at Phase 0.
+**Status:** v0.1.0, pre-alpha. Shipped: the relay's probe and file-transfer surface, the Hermes run
+adapter, the spoken approval gate, the Android client and its instrumentation suite. Not shipped yet:
+the call loop that wires transport, speech, brain and Hermes into the relay app (those modules are
+libraries today). See `docs/RELEASE.md` for what v0.1.0 contains and `docs/ROADMAP.md` for the phases.
 
 ## Why
 
@@ -39,7 +42,7 @@ needs tools, files, memory, or actions to Hermes, narrating progress while the a
 |---|---|
 | `relay/` | Python voice relay: WebRTC transport, speech pipeline, Hermes adapter |
 | `android/` | Kotlin/Compose client |
-| `docs/` | Architecture, ADRs, privacy model, testing, deployment, API reference |
+| `docs/` | Architecture, ADRs, privacy model, testing, deployment, API reference, release checklist |
 | `scripts/` | Repo hygiene checks, kanban seed script |
 
 ## Local-only invariant

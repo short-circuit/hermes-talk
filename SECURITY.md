@@ -2,7 +2,8 @@
 
 ## Reporting
 
-Open a private security advisory on GitHub, or email the maintainers listed in `pyproject.toml`.
+Open a private security advisory on GitHub (Security → Report a vulnerability). No email address is
+needed, and it keeps the report off the public issue tracker.
 Please do not open a public issue for vulnerabilities.
 
 ## Model

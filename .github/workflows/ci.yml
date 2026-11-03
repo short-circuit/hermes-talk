@@ -34,6 +34,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      # A tag must carry exactly the version the sources declare, and the
+      # sources must agree with each other on every branch.
+      - name: Version consistency
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            bash scripts/check_version.sh "${GITHUB_REF_NAME#v}"
+          else
+            bash scripts/check_version.sh
+          fi
+      # The wheel ships relay/LICENSE; it must stay byte-identical to the
+      # repository licence it mirrors.
+      - name: Licence copies agree
+        run: cmp LICENSE relay/LICENSE
       # Proves the gate still fails on planted data before it is trusted to pass.
       - name: Gate self-test (planted fixtures must be rejected)
         run: bash scripts/check_repo_hygiene.sh --self-test
