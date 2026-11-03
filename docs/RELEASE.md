@@ -1,12 +1,12 @@
 # Release process
 
 This document is the gate for every tagged release: what must be true before a tag exists, how to verify
-it, and what is recorded afterwards. It is also the record for v0.1.0 (see
-[Verification record](#verification-record-v010)).
+it, and what is recorded afterwards. It is also the record for v0.1.1 (see
+[Verification record](#verification-record-v011)).
 
-## Scope of v0.1.0
+## Scope of v0.1.1
 
-v0.1.0 is a pre-alpha baseline, not a finished product. It ships:
+v0.1.1 is a pre-alpha baseline, not a finished product. It ships:
 
 - the relay's probe surface (`/`, `/health`, `/ready`, `/v1/whoami`), the attachment inbox
   (`POST`/`PUT /v1/attachments`) and the artifact outbox (`GET`/`HEAD /v1/artifacts/{id}`);
@@ -18,7 +18,7 @@ v0.1.0 is a pre-alpha baseline, not a finished product. It ships:
 
 It does **not** ship the call loop that composes transport, speech, brain and Hermes into the relay app.
 `relay.app` mounts no WebSocket/WebRTC route yet; the Android client talks to `android/stub-relay` for
-signalling. Do not claim an end-to-end voice call as a v0.1.0 feature. The full gap list is under
+signalling. Do not claim an end-to-end voice call as a v0.1.1 feature. The full gap list is under
 [Known gaps](#known-gaps).
 
 ## Versioning
@@ -49,7 +49,7 @@ Rules:
 
 - Releases use SemVer 2.0.0. Below 1.0.0 a minor bump may break compatibility; every breaking change is
   listed under **Changed** in `CHANGELOG.md` with a migration note.
-- Tags are annotated and named `v<version>` (`v0.1.0`). A tag must never be moved or reused: if the
+- Tags are annotated and named `v<version>` (`v0.1.1`). A tag must never be moved or reused: if the
   contents change, cut a new patch version.
 - A release commit updates the three sources, `CHANGELOG.md` and this document's verification record in
   one commit, so the tag points at a tree whose declared version matches its tag.
@@ -58,7 +58,7 @@ Consistency gate:
 
 ```bash
 scripts/check_version.sh          # sources agree with each other
-scripts/check_version.sh 0.1.0    # ... and with the intended release
+scripts/check_version.sh 0.1.1    # ... and with the intended release
 ```
 
 The script exits non-zero on a missing or mismatched version. CI runs it in the `hygiene` job and, on a
@@ -80,7 +80,7 @@ git log --oneline -1        # the release commit
 ### 2. Version and changelog
 
 ```bash
-scripts/check_version.sh 0.1.0
+scripts/check_version.sh 0.1.1
 ```
 
 `CHANGELOG.md` must have an entry for the version being tagged with **Added**, **Changed**, **Fixed**,
@@ -154,7 +154,7 @@ answer its probes with the tagged version, and the Android build must produce a 
 
 ```bash
 venv/bin/pip wheel ./relay --no-deps -w /tmp/wheels
-python -m zipfile -l /tmp/wheels/hermes_talk_relay-0.1.0-py3-none-any.whl | grep -i license
+python -m zipfile -l /tmp/wheels/hermes_talk_relay-0.1.1-py3-none-any.whl | grep -i license
 cmp LICENSE relay/LICENSE
 ```
 
@@ -186,15 +186,15 @@ Pass criteria: `config --quiet` exits 0 and the relay image builds. `deploy/.env
 Only after 1–9 pass:
 
 ```bash
-git tag -a v0.1.0 -m "Hermes Talk v0.1.0"
-git show --stat v0.1.0
+git tag -a v0.1.1 -m "Hermes Talk v0.1.1"
+git show --stat v0.1.1
 ```
 
 Then re-run steps 2–6 **at the tag** in a fresh clone, because the tag is the artefact that matters.
 
 ## Install from scratch
 
-These are the commands verified for v0.1.0, in the order a new contributor runs them.
+These are the commands verified for v0.1.1, in the order a new contributor runs them.
 
 ### Relay, development install
 
@@ -262,16 +262,26 @@ licences: kokoro-v1.0 is Apache-2.0, Silero VAD is MIT, faster-whisper/Whisper m
 LFM voice-brain model is distributed under the LFM Open License — check each model card before
 redistributing a bundle.
 
-## Verification record (v0.1.0)
+## Verification record (v0.1.1)
 
-Recorded on 2026-11-03 on Arch Linux x86_64, Python 3.12.16, JDK 21, Docker with Compose v2. The
-repository had no configured git remote at the time, so GitHub Actions never ran; every CI job's commands
-were executed locally at the tag instead, and the first push will run the same workflow. This is the one
-acceptance criterion that is verified by local reproduction rather than by a CI provider.
+v0.1.1 is the published release. It supersedes v0.1.0: the v0.1.0 tree carries an invalid workflow file,
+so GitHub Actions never ran for that tag and `CHANGELOG.md` marks it withdrawn. Apart from the version
+strings and the workflow fix, the shipped code is the same, so the local reproduction below still
+describes this tree.
+
+The repository is published at <https://github.com/short-circuit/hermes-talk> and the workflow runs on
+every push and pull request, so the tag ref is exercised by the provider rather than reproduced by hand.
+
+CI evidence: the workflow is validated by the run on the release commit's `main` push and by the
+`v0.1.1` tag run. Both run URLs and the per-job outcomes are recorded in the commit immediately after
+the release commit, because a run URL only exists once the commit or tag has been pushed.
+
+Local reproduction at the release tree (recorded on 2026-11-03 on Arch Linux x86_64, Python 3.12.16,
+JDK 21, Docker with Compose v2):
 
 | Check | Command | Result |
 |---|---|---|
-| Version consistency | `scripts/check_version.sh 0.1.0` | `check_version: ok (0.1.0)` |
+| Version consistency | `scripts/check_version.sh 0.1.1` | `check_version: ok (0.1.1)` |
 | Python lint | `ruff check <tracked *.py>` | `All checks passed!` |
 | Python format | `ruff format --check <tracked *.py>` | `86 files already formatted` |
 | Relay tests | `pytest relay/tests` | `729 passed, 1 skipped` in 36.58s, exit 0 |
@@ -283,7 +293,7 @@ acceptance criterion that is verified by local reproduction rather than by a CI 
 | Full-history secrets | `gitleaks git --log-opts=--all --redact` | no findings (57 commits) |
 | Allowlist proof | plant a `ghp_` token outside the allowlisted paths, `gitleaks dir .` | 2 findings on the planted file, none elsewhere |
 | Pre-commit | `pre-commit run --all-files` | all hooks pass |
-| Relay smoke (clean clone) | `python -m relay.app` + probes | `/health` → `{"status":"ok","service":"voice-relay","version":"0.1.0"}`; `/ready` → `ready`; `/v1/whoami` → 401 without a token, `{"label":"bootstrap"}` with the bootstrap token |
+| Relay smoke (clean clone) | `python -m relay.app` + probes | `/health` → `{"status":"ok","service":"voice-relay","version":"0.1.1"}`; `/ready` → `ready`; `/v1/whoami` → 401 without a token, `{"label":"bootstrap"}` with the bootstrap token |
 | Wheel licence | `pip wheel ./relay` | `dist-info/licenses/LICENSE` present; `License-Expression: MIT`, `License-File: LICENSE` |
 | Compose config | `docker compose -f deploy/compose.yaml config --quiet` | exit 0 |
 | Relay image | `docker compose -f deploy/compose.yaml build relay` | image `hermes-talk-relay:local` built |
@@ -299,7 +309,7 @@ Defects found and fixed on the way to the tag:
 ## Tagging and publication
 
 1. Commit the release tree and tag it as described above.
-2. If a remote exists, push the branch and the tag: `git push origin main && git push origin v0.1.0`.
+2. Push the branch and the tag: `git push origin main && git push origin v0.1.1`.
 3. Confirm the `secrets`, `hygiene`, `python`, `android` and `android-instrumentation` jobs are green
    **on the tag ref**, not just on the branch. The emulator job is the slowest; it must be green for a
    release.
@@ -327,5 +337,6 @@ Defects found and fixed on the way to the tag:
 - `MAX_CALL_MINUTES` is configured but not enforced.
 - Release APKs must be built locally with signing credentials that live outside the repository. CI
   builds and tests debug only, so the first CI-verified signed APK is a local artefact.
-- The GitHub Actions emulator job has not run yet; it was reproduced locally with the workflow's exact
-  invocation, and its first real run on the hosted runner is the production confirmation.
+- The GitHub Actions emulator job runs on a hosted `ubuntu-latest` runner with KVM enabled; the local
+  reproduction used AVD `hermes_talk_34` on API 34. The hosted run is the production confirmation and is
+  recorded in the verification record.

@@ -7,7 +7,11 @@ All notable changes to Hermes Talk are recorded here. The format follows
 Because this is a pre-1.0 project, a minor bump may contain breaking changes; they are called out under
 **Changed** with a migration note.
 
-## Unreleased
+## 0.1.1 — 2026-11-03
+
+Patch release. It supersedes v0.1.0, whose tree carries a CI workflow that GitHub Actions rejects (see
+**Fixed**); that tag is immutable and stays published, but it produced no workflow run. The relay code is
+unchanged apart from the version strings.
 
 ### Added
 
