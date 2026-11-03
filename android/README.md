@@ -35,6 +35,55 @@ wake-word policy and the attachment queue. The attachment tests use a real
 framing, retries and checksum verification without an emulator. No device is
 required.
 
+## Versioning and release signing
+
+`versionName` follows the release tag exactly (`v<versionName>`). `versionCode` is derived in
+`app/build.gradle.kts` as `major * 10000 + minor * 100 + patch` and must never be edited by hand; the
+two cannot drift. `scripts/check_version.sh` gates both in CI.
+
+The debug build needs no configuration:
+
+```sh
+./gradlew assembleDebug
+```
+
+A release build needs a keystore and credentials supplied from **outside** this repository. Set them as
+environment variables or as Gradle properties in `~/.gradle/gradle.properties`:
+
+| Environment variable | Gradle property |
+|---|---|
+| `HERMES_TALK_KEYSTORE_FILE` | `hermesTalkKeystoreFile` |
+| `HERMES_TALK_KEYSTORE_PASSWORD` | `hermesTalkKeystorePassword` |
+| `HERMES_TALK_KEY_ALIAS` | `hermesTalkKeyAlias` |
+| `HERMES_TALK_KEY_PASSWORD` | `hermesTalkKeyPassword` |
+
+Create the keystore once (it is never committed):
+
+```sh
+keytool -genkeypair -v -keystore ~/.android/hermes-talk-release.jks \
+  -alias hermes-talk -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Then build and verify:
+
+```sh
+HERMES_TALK_KEYSTORE_FILE=~/.android/hermes-talk-release.jks \
+HERMES_TALK_KEYSTORE_PASSWORD=... \
+HERMES_TALK_KEY_ALIAS=hermes-talk \
+HERMES_TALK_KEY_PASSWORD=... \
+  ./gradlew assembleRelease
+APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+"$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+`./gradlew assembleRelease` fails before any task executes, with an actionable message naming the
+missing values, when the credentials are absent. Debug builds, unit tests and every non-packaging task
+keep working without setup.
+
+The keystore and passwords are never committed: `*.jks` and `*.keystore` are gitignored and the
+repository hygiene check scans the tree. CI builds debug only (`./gradlew test`, `assembleDebug`, and
+the emulator instrumentation job) and needs no signing secret.
+
 ## Run the stub relay
 
 From the repository root:

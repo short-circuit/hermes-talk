@@ -31,8 +31,19 @@ The version is declared in three places and they must agree:
 | `relay/__init__.py` | `__version__` (served by `/health` and `/`) |
 | `android/app/build.gradle.kts` | `versionName` |
 
-`android versionCode` is separate: it must increase monotonically for every published Android build.
-v0.1.0 keeps `versionCode = 1`, the first value.
+Android versioning is tied to the release tag:
+
+- `versionName` follows the release tag exactly (`v<versionName>`); the literal `versionName` in
+  `android/app/build.gradle.kts` is the Android source of truth.
+- `versionCode` is **derived** in `android/app/build.gradle.kts` as
+  `major * 10000 + minor * 100 + patch`. It can never drift from `versionName` and is monotonic for
+  every SemVer increase. It is never edited by hand, never reused and never decreased. A version with
+  `minor` or `patch` >= 100 is rejected by the build.
+- v0.1.0's tagged debug APK used `versionCode = 1` and was never distributed. The derived scheme gives
+  `100` for `0.1.0` and `200` for `0.2.0`, so no device can see a downgrade.
+- Release builds are signed with a keystore that lives outside the repository. The signing credentials
+  are environment variables or `~/.gradle/gradle.properties`, never committed.
+- The release commit must not change the keystore or its credentials.
 
 Rules:
 
@@ -100,7 +111,26 @@ ANDROID_HOME=$HOME/Android/Sdk ./gradlew assembleDebug --no-daemon
 ```
 
 Pass criteria: `BUILD SUCCESSFUL` for both, zero test failures in the `TEST-*.xml` reports, and
-`android/app/build/outputs/apk/debug/app-debug.apk` produced. The emulator instrumentation job needs a
+`android/app/build/outputs/apk/debug/app-debug.apk` produced. CI builds debug only, so it needs no
+signing secret.
+
+Release signing is a local gate, run once with the four `HERMES_TALK_*` variables set (see
+[Versioning](#versioning)):
+
+```bash
+HERMES_TALK_KEYSTORE_FILE=/absolute/path/to/hermes-talk-release.jks \
+HERMES_TALK_KEYSTORE_PASSWORD=... \
+HERMES_TALK_KEY_ALIAS=... \
+HERMES_TALK_KEY_PASSWORD=... \
+  ANDROID_HOME=$HOME/Android/Sdk ./gradlew assembleRelease --no-daemon
+APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+"$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+Pass criteria: `BUILD SUCCESSFUL`, `android/app/build/outputs/apk/release/app-release.apk` produced, and
+`apksigner verify --print-certs` reports the release certificate. Run `./gradlew assembleRelease` once
+**without** the variables: it must fail before any task executes with the actionable "release signing is
+not configured" message. That failure is part of the gate. The emulator instrumentation job needs a
 running emulator; run it separately when one is available.
 
 ### 5. Repository hygiene and secrets (the `hygiene` and `secrets` CI jobs)
@@ -270,11 +300,14 @@ Defects found and fixed on the way to the tag:
 
 1. Commit the release tree and tag it as described above.
 2. If a remote exists, push the branch and the tag: `git push origin main && git push origin v0.1.0`.
-3. Confirm the `secrets`, `hygiene`, `python` and `android` jobs are green **on the tag ref**, not just on
-   the branch. The emulator instrumentation job is the slowest; it must be green for a release.
+3. Confirm the `secrets`, `hygiene`, `python`, `android` and `android-instrumentation` jobs are green
+   **on the tag ref**, not just on the branch. The emulator job is the slowest; it must be green for a
+   release.
 4. If the relay image is published, tag it with the git short sha and record that sha in the release notes;
    `RELAY_IMAGE` in `deploy/.env` is the rollback handle.
 5. Announce what the release does **not** do (see Scope) so users do not expect a working voice call.
+6. Record the run URL and the per-job outcomes in this document in a follow-up commit — a run URL only
+   exists after the push, so the release commit cannot carry it.
 
 ## Rollback
 
@@ -292,6 +325,7 @@ Defects found and fixed on the way to the tag:
   from `android/stub-relay`).
 - `POST /v1/runs` is reserved in the rate-limit table but not mounted.
 - `MAX_CALL_MINUTES` is configured but not enforced.
-- Android release builds are unsigned (debug signing only) and `versionCode` is still `1`.
-- The GitHub Actions emulator job has never run (no remote is configured); it was reproduced locally with
-  the workflow's exact invocation, and its first real run is still the production confirmation.
+- Release APKs must be built locally with signing credentials that live outside the repository. CI
+  builds and tests debug only, so the first CI-verified signed APK is a local artefact.
+- The GitHub Actions emulator job has not run yet; it was reproduced locally with the workflow's exact
+  invocation, and its first real run on the hosted runner is the production confirmation.

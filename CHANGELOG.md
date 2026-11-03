@@ -7,12 +7,36 @@ All notable changes to Hermes Talk are recorded here. The format follows
 Because this is a pre-1.0 project, a minor bump may contain breaking changes; they are called out under
 **Changed** with a migration note.
 
+## Unreleased
+
+### Added
+
+- Android release signing path: `android/app/build.gradle.kts` reads the keystore and credentials from
+  `HERMES_TALK_*` environment variables or `hermesTalk*` properties in `~/.gradle/gradle.properties`,
+  creates the release signing config when all four are present, and fails a release packaging task with
+  an actionable message when they are missing. Debug builds and tests need no setup.
+- Android `versionCode` is derived from `versionName` as `major * 10000 + minor * 100 + patch`
+  (`versionCodeFor()` in `android/app/build.gradle.kts`), so the two can never drift; a version with
+  `minor` or `patch` >= 100 is rejected.
+
+### Fixed
+
+- `.github/workflows/ci.yml`: the `android` and `android-instrumentation` jobs guarded themselves with
+  `if: ${{ hashFiles('android/gradlew') != '' }}` at job level. GitHub only allows `hashFiles()` in
+  step-level keys, so the workflow was invalid: every push failed instantly with zero jobs, and the
+  v0.1.0 tag produced no run at all. The job-level guard is removed — `android/gradlew` is tracked, so
+  the jobs always apply.
+
 ## 0.1.0 — 2026-11-03
 
 First tagged release. It is a pre-alpha baseline: the relay's probe and file-transfer surface, the Hermes
 run adapter, the spoken approval gate and the Android client are shipped and tested; the call loop that
 composes transport, speech, brain and Hermes into the relay app is not mounted yet (see **Known
 limitations**).
+
+> **Withdrawn for CI purposes:** the tag is immutable and its tree is what was tested locally, but its
+> `.github/workflows/ci.yml` is invalid, so GitHub Actions never ran for it. The workflow fix ships in
+> the next patch release.
 
 ### Added
 
