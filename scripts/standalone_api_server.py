@@ -6,6 +6,7 @@ This runs the same ``APIServerAdapter`` the gateway hosts, minus the gateway's s
 authority, so canonical-mode-only behaviour (pending_controls, ownership refusals) is not
 exercised. It exists to smoke-test the probe script, not to replace the real listener.
 """
+
 import asyncio
 import os
 import sys
@@ -18,7 +19,11 @@ async def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8642
     cfg = PlatformConfig(
         enabled=True,
-        extra={"host": "127.0.0.1", "port": port, "key": os.environ.get("API_SERVER_KEY", "")},
+        extra={
+            "host": "127.0.0.1",
+            "port": port,
+            "key": os.environ.get("API_SERVER_KEY", ""),
+        },
     )
     adapter = APIServerAdapter(cfg)
     if not await adapter.connect():

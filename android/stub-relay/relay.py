@@ -36,14 +36,14 @@ import threading
 import uuid
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import av
+from aioice import Candidate as AioiceCandidate
 from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 from aiortc.rtcicetransport import candidate_from_aioice
-from aioice import Candidate as AioiceCandidate
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("stub-relay")
@@ -52,10 +52,10 @@ logging.getLogger("aioice").setLevel(logging.WARNING)
 
 SESSION_PATH_RE = re.compile(r"^/sessions/([0-9a-fA-F-]+)(?:/api/offer)?$")
 OFFER_PATH_RE = re.compile(r"^/sessions/([0-9a-fA-F-]+)/api/offer$")
-SESSIONS: dict[str, "Session"] = {}
+SESSIONS: dict[str, Session] = {}
 SESSIONS_LOCK = threading.Lock()
-EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
-AUTH_TOKEN: Optional[str] = None
+EVENT_LOOP: asyncio.AbstractEventLoop | None = None
+AUTH_TOKEN: str | None = None
 TONE_ENABLED = True
 
 
@@ -101,10 +101,10 @@ class Session:
 
     def __init__(self, session_id: str) -> None:
         self.id = session_id
-        self.pc: Optional[RTCPeerConnection] = None
+        self.pc: RTCPeerConnection | None = None
         self.channel: Any = None
-        self.tone: Optional[ToneTrack] = None
-        self.ice_complete: Optional[asyncio.Event] = None
+        self.tone: ToneTrack | None = None
+        self.ice_complete: asyncio.Event | None = None
         self.audio_frames = 0
         self.bot_ready_sent = False
         self.closed = False
@@ -122,7 +122,7 @@ def _send_bot_ready(channel: Any, session: Session) -> None:
         channel.send(json.dumps(message))
         session.bot_ready_sent = True
         LOG.info("session %s bot-ready sent", session.id)
-    except Exception as error:  # pragma: no cover - defensive
+    except Exception as error:  # noqa: BLE001 - defensive  # pragma: no cover
         LOG.info("session %s bot-ready send failed: %s", session.id, error)
 
 
@@ -150,7 +150,11 @@ async def _create_peer(session: Session) -> RTCPeerConnection:
 
         @channel.on("message")
         def on_message(message: Any) -> None:
-            text = message.decode("utf-8", "replace") if isinstance(message, bytes) else str(message)
+            text = (
+                message.decode("utf-8", "replace")
+                if isinstance(message, bytes)
+                else str(message)
+            )
             LOG.info("session %s datachannel message: %s", session.id, text[:200])
             if "client-ready" in text:
                 LOG.info("session %s client-ready received", session.id)
@@ -185,10 +189,14 @@ async def _consume_audio(session: Session, track: MediaStreamTrack) -> None:
             await track.recv()
             session.audio_frames += 1
             if session.audio_frames % 100 == 0:
-                LOG.info("session %s audio frames received: %d", session.id, session.audio_frames)
+                LOG.info(
+                    "session %s audio frames received: %d",
+                    session.id,
+                    session.audio_frames,
+                )
     except MediaStreamError:
         LOG.info("session %s audio track ended", session.id)
-    except Exception as error:  # pragma: no cover - defensive
+    except Exception as error:  # noqa: BLE001 - defensive  # pragma: no cover
         LOG.info("session %s audio track error: %s", session.id, error)
 
 
@@ -206,7 +214,7 @@ async def _handle_offer(session_id: str, sdp: str, offer_type: str) -> dict[str,
     if session.ice_complete is not None:
         try:
             await asyncio.wait_for(session.ice_complete.wait(), timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             LOG.info("session %s ice gathering timed out", session.id)
     description = pc.localDescription
     if description is None:
@@ -233,7 +241,7 @@ async def _add_candidates(session_id: str, candidates: list[dict[str, Any]]) -> 
             candidate.sdpMid = item.get("sdpMid")
             candidate.sdpMLineIndex = item.get("sdpMLineIndex")
             await session.pc.addIceCandidate(candidate)
-        except Exception as error:  # pragma: no cover - duplicate candidates are harmless
+        except Exception as error:  # noqa: BLE001 - duplicate candidates are harmless
             LOG.info("session %s candidate ignored: %s", session_id, error)
 
 
@@ -288,10 +296,11 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError(f"invalid JSON body: {error}") from error
         if not isinstance(parsed, dict):
-            raise ValueError("JSON body must be an object")
+            # ValueError is the handler's 400 signal; TypeError would escape as a 500.
+            raise ValueError("JSON body must be an object")  # noqa: TRY004
         return parsed
 
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+    def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/health":
             self._send_json(200, {"status": "ok"})
@@ -301,7 +310,7 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not found"})
 
-    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+    def do_POST(self) -> None:
         path = urlparse(self.path).path
         if path == "/start":
             if not self._require_auth():
@@ -347,7 +356,7 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
 
         self._send_json(404, {"error": "not found"})
 
-    def do_PATCH(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+    def do_PATCH(self) -> None:
         path = urlparse(self.path).path
         offer_match = OFFER_PATH_RE.match(path)
         if not offer_match:
@@ -365,7 +374,8 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             candidates = body.get("candidates", [])
             if not isinstance(candidates, list):
-                raise ValueError("candidates must be a list")
+                # ValueError maps to a 400 body; the handler does not catch TypeError.
+                raise ValueError("candidates must be a list")  # noqa: TRY004
             if EVENT_LOOP is None:
                 raise RuntimeError("relay event loop is not running")
             asyncio.run_coroutine_threadsafe(
@@ -374,11 +384,11 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             ).result(timeout=10.0)
             LOG.info("session %s received %d candidates", session_id, len(candidates))
             self._send_json(200, {"status": "ok"})
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - every failure becomes a 500 body
             LOG.info("session %s candidate update failed: %s", session_id, error)
             self._send_json(500, {"error": str(error)})
 
-    def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+    def do_DELETE(self) -> None:
         path = urlparse(self.path).path
         match = SESSION_PATH_RE.match(path)
         if not match:
@@ -413,7 +423,7 @@ def _private_key_pem_file(key_b64_path: str) -> str:
         encoded = "".join(handle.read().split())
     der = base64.b64decode(encoded, validate=True)
     body = base64.b64encode(der).decode("ascii")
-    lines = "\n".join(body[index:index + 64] for index in range(0, len(body), 64))
+    lines = "\n".join(body[index : index + 64] for index in range(0, len(body), 64))
     # Build the armor from parts so the repo hygiene gate does not flag the
     # literal PEM header as a committed private key.
     armor = "-" * 5
@@ -429,10 +439,18 @@ def _private_key_pem_file(key_b64_path: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hermes Talk stub relay (test fixture)")
-    parser.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8790, help="bind port (default: 8790)")
-    parser.add_argument("--token", default=None, help="optional bearer token for /start and offers")
+    parser = argparse.ArgumentParser(
+        description="Hermes Talk stub relay (test fixture)"
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8790, help="bind port (default: 8790)"
+    )
+    parser.add_argument(
+        "--token", default=None, help="optional bearer token for /start and offers"
+    )
     parser.add_argument(
         "--tone",
         action=argparse.BooleanOptionalAction,
@@ -458,7 +476,7 @@ def main() -> None:
     AUTH_TOKEN = args.token
     TONE_ENABLED = args.tone
 
-    tls_context: Optional[ssl.SSLContext] = None
+    tls_context: ssl.SSLContext | None = None
     if args.tls_cert and args.tls_key:
         key_path = _private_key_pem_file(args.tls_key)
         try:

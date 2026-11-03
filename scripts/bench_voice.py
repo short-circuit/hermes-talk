@@ -45,10 +45,15 @@ def load_cases(path: Path) -> dict:
         return json.load(fh)
 
 
-def build_payload(args, system_prompt: str, utterance: dict, audio_b64: str | None) -> dict:
+def build_payload(
+    args, system_prompt: str, utterance: dict, audio_b64: str | None
+) -> dict:
     if audio_b64 is not None:
         content = [
-            {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "wav"}},
+            {
+                "type": "input_audio",
+                "input_audio": {"data": audio_b64, "format": "wav"},
+            },
         ]
     else:
         content = utterance["text"]
@@ -95,7 +100,12 @@ def run_case(url: str, payload: dict, timeout: float) -> dict:
                 text_parts.append(message.get("content") or "")
                 for call in message.get("tool_calls") or []:
                     fn = call.get("function") or {}
-                    tool_calls.append({"name": fn.get("name") or "", "arguments": fn.get("arguments") or ""})
+                    tool_calls.append(
+                        {
+                            "name": fn.get("name") or "",
+                            "arguments": fn.get("arguments") or "",
+                        }
+                    )
                 usage = event.get("usage")
                 timings = event.get("timings")
             else:
@@ -212,16 +222,31 @@ def main() -> int:
     parser.add_argument("--url", default="http://127.0.0.1:8080")
     parser.add_argument("--model", required=True)
     parser.add_argument("--mode", choices=("text", "audio"), default="text")
-    parser.add_argument("--audio-dir", type=Path, help="directory with <id>.wav files for --mode audio")
-    parser.add_argument("--cases", type=Path, default=HERE / "voice_bench_utterances.json")
-    parser.add_argument("--no-think", action="store_true", help="disable model reasoning (chat template)")
-    parser.add_argument("--tool-choice", default="required", choices=("auto", "required", "none"),
-                        help="force a tool call (default) or let the model answer in text")
+    parser.add_argument(
+        "--audio-dir", type=Path, help="directory with <id>.wav files for --mode audio"
+    )
+    parser.add_argument(
+        "--cases", type=Path, default=HERE / "voice_bench_utterances.json"
+    )
+    parser.add_argument(
+        "--no-think",
+        action="store_true",
+        help="disable model reasoning (chat template)",
+    )
+    parser.add_argument(
+        "--tool-choice",
+        default="required",
+        choices=("auto", "required", "none"),
+        help="force a tool call (default) or let the model answer in text",
+    )
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument("--no-stream", action="store_true",
-                        help="non-streaming request (for backends that emit no SSE deltas)")
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="non-streaming request (for backends that emit no SSE deltas)",
+    )
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
 
@@ -251,7 +276,7 @@ def main() -> int:
         ttft = row["ttft_s"]
         ttft_s = "n/a" if ttft is None else f"{ttft:.3f}s"
         print(
-            f"{mark} {row['id']:>2} expected={row['expected']:<17} got={str(row['selected']):<17}"
+            f"{mark} {row['id']:>2} expected={row['expected']:<17} got={row['selected']!s:<17}"
             f" ttft={ttft_s} total={row['total_s']:.2f}s tok/s={row['tokens_per_s']}"
         )
 
@@ -260,8 +285,16 @@ def main() -> int:
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(
-            json.dumps({"model": args.model, "url": args.url, "mode": args.mode,
-                        "summary": summary, "rows": rows}, indent=2),
+            json.dumps(
+                {
+                    "model": args.model,
+                    "url": args.url,
+                    "mode": args.mode,
+                    "summary": summary,
+                    "rows": rows,
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
     return 0

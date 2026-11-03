@@ -44,8 +44,7 @@ def rms_of(pcm):
     for s in samples:
         total += s * s
         a = abs(s)
-        if a > peak:
-            peak = a
+        peak = max(peak, a)
     return math.sqrt(total / len(samples)), peak
 
 
@@ -105,14 +104,16 @@ def handle(conn, addr, args, stats):
             if isinstance(level, tuple):
                 stats["up_rms"], stats["up_peak"] = level
 
-    threads = [threading.Thread(target=downstream, daemon=True),
-               threading.Thread(target=upstream, daemon=True)]
+    threads = [
+        threading.Thread(target=downstream, daemon=True),
+        threading.Thread(target=upstream, daemon=True),
+    ]
     for t in threads:
         t.start()
     for t in threads:
         try:
             t.join()
-        except Exception:  # noqa: BLE001 - a reset connection must not kill the relay
+        except Exception:  # noqa: BLE001, S110 - a reset connection must not kill the relay
             pass
     stats["connected"] = False
     try:
@@ -124,23 +125,35 @@ def handle(conn, addr, args, stats):
 
 def main():
     parser = argparse.ArgumentParser(description="Hermes Talk spike stub relay")
-    parser.add_argument("--host", default="127.0.0.1", help="bind address (loopback by default)")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="bind address (loopback by default)"
+    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--rate", type=int, default=16000)
     parser.add_argument("--tone-hz", type=float, default=440.0)
     parser.add_argument("--amplitude", type=float, default=0.25)
     args = parser.parse_args()
 
-    stats = {"connected": False, "up_frames": 0, "up_bytes": 0, "down_frames": 0,
-             "down_bytes": 0, "up_rms": 0.0, "up_peak": 0}
+    stats = {
+        "connected": False,
+        "up_frames": 0,
+        "up_bytes": 0,
+        "down_frames": 0,
+        "down_bytes": 0,
+        "up_rms": 0.0,
+        "up_peak": 0,
+    }
     started = time.monotonic()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
     server.listen(1)
-    print(f"relay: listening on {args.host}:{args.port} "
-          f"(rate={args.rate} tone={args.tone_hz}Hz)", flush=True)
+    print(
+        f"relay: listening on {args.host}:{args.port} "
+        f"(rate={args.rate} tone={args.tone_hz}Hz)",
+        flush=True,
+    )
 
     def reporter():
         last = (0, 0)
@@ -149,10 +162,12 @@ def main():
             if not stats["connected"]:
                 continue
             up, down = stats["up_frames"], stats["down_frames"]
-            print(f"relay: t={time.monotonic() - started:7.1f}s "
-                  f"up_frames={up} (+{up - last[0]}) up_rms={stats['up_rms']:.0f} "
-                  f"up_peak={stats['up_peak']} down_frames={down} (+{down - last[1]})",
-                  flush=True)
+            print(
+                f"relay: t={time.monotonic() - started:7.1f}s "
+                f"up_frames={up} (+{up - last[0]}) up_rms={stats['up_rms']:.0f} "
+                f"up_peak={stats['up_peak']} down_frames={down} (+{down - last[1]})",
+                flush=True,
+            )
             last = (up, down)
 
     threading.Thread(target=reporter, daemon=True).start()
