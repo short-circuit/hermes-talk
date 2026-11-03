@@ -272,9 +272,16 @@ describes this tree.
 The repository is published at <https://github.com/short-circuit/hermes-talk> and the workflow runs on
 every push and pull request, so the tag ref is exercised by the provider rather than reproduced by hand.
 
-CI evidence: the workflow is validated by the run on the release commit's `main` push and by the
-`v0.1.1` tag run. Both run URLs and the per-job outcomes are recorded in the commit immediately after
-the release commit, because a run URL only exists once the commit or tag has been pushed.
+CI evidence (GitHub Actions, recorded 2026-11-03):
+
+| Ref | Run | Outcome |
+|---|---|---|
+| `refs/tags/v0.1.1` @ `88e0bbd` | <https://github.com/short-circuit/hermes-talk/actions/runs/41564027253> | success — all five jobs green: `secrets` (gitleaks, full history) 7 s; `hygiene` 7 s (`check_version: ok (0.1.1)`, licence copies agree, gate self-test, `hygiene: clean (328 files)`); `python` 60 s (ruff check/format, pytest); `android` 174 s (`gradlew test`); `android-instrumentation` 333 s (20 tests on emulator-5554, `BUILD SUCCESSFUL`) |
+| `main` @ `88e0bbd` | <https://github.com/short-circuit/hermes-talk/actions/runs/41563126930> | success — the same five jobs on the same tree |
+
+Two earlier runs stay in the history because they are what this release fixed: `41554157580` (the
+v0.1.0 push) failed in 0 s with zero jobs because the workflow file was invalid, and `41557840345` (the
+first push of this tree) reached the emulator but never ran the tests — see the defects list below.
 
 Local reproduction at the release tree (recorded on 2026-11-03 on Arch Linux x86_64, Python 3.12.16,
 JDK 21, Docker with Compose v2):
