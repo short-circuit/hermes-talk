@@ -305,6 +305,12 @@ Defects found and fixed on the way to the tag:
   `--dry-run` output is byte-identical before and after.
 - the wheel declared a licence expression but carried no licence file; `license-files` now ships it.
 - `SECURITY.md` pointed at maintainer emails that did not exist; it now points at a private advisory.
+- the first hosted run of the `android-instrumentation` job (`41557840345`) never reached the tests:
+  `reactivecircus/android-emulator-runner` splits its `script` input into single lines and runs each in
+  its own shell, so the `for` wait-loop and the `./gradlew` backslash continuation were passed to
+  `/usr/bin/sh` one line at a time (`Syntax error: end of file unexpected (expecting "done")`) and the
+  job then sat until its 45-minute timeout. The sequence now lives in `scripts/android-instrumentation.sh`
+  and the step invokes it as a single line.
 
 ## Tagging and publication
 

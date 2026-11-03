@@ -30,6 +30,11 @@ unchanged apart from the version strings.
   step-level keys, so the workflow was invalid: every push failed instantly with zero jobs, and the
   v0.1.0 tag produced no run at all. The job-level guard is removed — `android/gradlew` is tracked, so
   the jobs always apply.
+- `.github/workflows/ci.yml`: the `android-instrumentation` step passed a multi-line `script` to
+  `reactivecircus/android-emulator-runner`, which splits that input into single lines and runs each in
+  its own shell. The `for` wait-loop and the `./gradlew` backslash continuation therefore failed with
+  `Syntax error: end of file unexpected (expecting "done")` and the job hung until its timeout. The
+  sequence now lives in `scripts/android-instrumentation.sh` and the step invokes it as one line.
 
 ## 0.1.0 — 2026-11-03
 

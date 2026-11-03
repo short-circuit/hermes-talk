@@ -136,15 +136,7 @@ jobs:
           emulator-options: >-
             -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
             -camera-back none
-          script: |
-            relay-venv/bin/python android/stub-relay/relay.py --port 8790 &
-            for attempt in $(seq 1 30); do
-              if curl -sf http://127.0.0.1:8790/health > /dev/null; then break; fi
-              sleep 1
-            done
-            adb reverse tcp:8790 tcp:8790
-            cd android
-            ./gradlew :app:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.notAnnotation=androidx.test.filters.LargeTest \
-              -Pandroid.testInstrumentationRunnerArguments.screenOffSeconds=15 \
-              --console=plain
+          # One line on purpose: the action splits `script` into single lines
+          # and runs each in its own shell, so loops and continuations must
+          # live in the script file, not here.
+          script: bash scripts/android-instrumentation.sh
