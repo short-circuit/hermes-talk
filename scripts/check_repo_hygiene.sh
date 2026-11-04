@@ -45,12 +45,18 @@ HOME_RE='(/home/[[:alnum:]_][[:alnum:]_.-]*/|/Users/[[:alnum:]_][[:alnum:]_.-]*/
 HOME_ALLOW_RE='^/home/runner/$'
 
 LAN_RE='\b(10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+)\b'
+# The Android emulator's user-mode NAT uses a fixed subnet: 10.0.2.2 is the
+# host-loopback alias, 10.0.2.3 the DNS alias and 10.0.2.15 the emulated device.
+# Those addresses are fixed by the emulator, not by a deployment's LAN, so they
+# are allowed to appear literally in docs and scripts.
+LAN_ALLOW_RE='^(10\.0\.2\.(2|3|15))$'
 
 SECRET_RE='(sk-[[:alnum:]_-]{20,}|gh[pousr]_[[:alnum:]]{30,}|github_pat_[[:alnum:]_]{40,}|xox[baprs]-[[:alnum:]-]{10,}|AKIA[[:alnum:]]{16}|AIza[[:alnum:]_-]{35}|hf_[[:alnum:]]{30,}|glpat-[[:alnum:]_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
 
 HOST_RE='[[:alnum:]_-]+\.(local|lan|home|internal)\b'
 # Synthetic hostnames are allowed: voice.example.lan, relay.example.local, ...
-HOST_ALLOW_RE='^([[:alnum:]_-]+\.)*example\.(local|lan|home|internal)$'
+# `Path.home` is the Python API, not a hostname; the suffix rule cannot tell.
+HOST_ALLOW_RE='^([[:alnum:]_-]+\.)*example\.(local|lan|home|internal)$|^Path\.home$'
 
 fail=0
 report() {
@@ -75,7 +81,7 @@ drop_allowed() {
 
 r_email() { grep -HnoIE -- "$EMAIL_RE" "$@" 2>/dev/null | drop_allowed "$EMAIL_ALLOW_RE"; }
 r_home() { grep -HnoIE -- "$HOME_RE" "$@" 2>/dev/null | drop_allowed "$HOME_ALLOW_RE"; }
-r_lan() { grep -HnoIE -- "$LAN_RE" "$@" 2>/dev/null; }
+r_lan() { grep -HnoIE -- "$LAN_RE" "$@" 2>/dev/null | drop_allowed "$LAN_ALLOW_RE"; }
 r_secret() { grep -HnoIE -- "$SECRET_RE" "$@" 2>/dev/null; }
 r_host() { grep -HnoIE -- "$HOST_RE" "$@" 2>/dev/null | drop_allowed "$HOST_ALLOW_RE"; }
 
@@ -205,7 +211,7 @@ self_test() {
   # Fixture values are assembled from fragments so this script does not trip
   # its own rules when the repository is scanned.
   frag() { local IFS=; printf '%s' "$*"; }
-  local FIX_EMAIL FIX_PAT FIX_OPENAI FIX_AWS FIX_PEM FIX_LAN FIX_10 FIX_172 FIX_HOST FIX_HOME FIX_USERS
+  local FIX_EMAIL FIX_PAT FIX_OPENAI FIX_AWS FIX_PEM FIX_LAN FIX_10 FIX_172 FIX_HOST FIX_HOME FIX_USERS FIX_EMU
   FIX_EMAIL=$(frag alice @ corp-mail.net)
   FIX_PAT=$(frag ghp_ 0123456789abcdefghijklmnopqrstuvwxyzAB)
   FIX_OPENAI=$(frag sk-proj- abcdefghijklmnopqrstuvwx)
@@ -217,6 +223,7 @@ self_test() {
   FIX_HOST=$(frag relay.tower .local)
   FIX_HOME=$(frag /home/ alice/)
   FIX_USERS=$(frag /Users/ alice/)
+  FIX_EMU=$(frag 10.0. 2.2)
 
   assert_fires R1 "personal email" "contact ${FIX_EMAIL} for access"
   assert_silent R1 "example domain" 'contact noreply@example.com'
@@ -233,6 +240,8 @@ self_test() {
   assert_fires R3 "172.16/12" "inference host at ${FIX_172}"
   assert_silent R3 "loopback" 'relay listening on 127.0.0.1:8765'
   assert_silent R3 "TEST-NET" 'documentation address 192.0.2.10'
+  assert_silent R3 "emulator host alias" "adb reverse reaches ${FIX_EMU}:8790"
+  assert_fires R3 "10/8 outside the emulator NAT" "adb reverse reaches ${FIX_10}:8790"
 
   assert_fires R4 "github PAT" "GITHUB_TOKEN=${FIX_PAT}"
   assert_fires R4 "openai key" "OPENAI_API_KEY=${FIX_OPENAI}"
@@ -242,6 +251,7 @@ self_test() {
 
   assert_fires R7 "mDNS hostname" "ssh ${FIX_HOST}"
   assert_silent R7 "synthetic hostname" 'server_name voice.example.lan;'
+  assert_silent R7 "python home API" 'state_path = Path.home() / "hermes-talk"'
 
   # R5 and R6 need real files.
   head -c $((MAX_BYTES + 1)) /dev/zero >"$tmp/big.bin"

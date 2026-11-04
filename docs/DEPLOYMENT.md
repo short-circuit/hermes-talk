@@ -109,7 +109,7 @@ cold start and per-turn latency are in `docs/research/speech-latency.md`.
 ```
 git clone <repository> /opt/hermes-talk
 cd /opt/hermes-talk/deploy
-cp .env.example .env && chmod 600 .env
+cp ../.env.example .env && chmod 600 .env
 $EDITOR .env
 ```
 
@@ -291,6 +291,70 @@ name other than `RELAY_SITE_ADDRESS`, fails certificate validation by design.
 
 Back up the `caddy-data` volume together with the relay data: it holds the CA key. Losing it means every
 client must trust a new root certificate.
+
+## Emulator access (development)
+
+The Android emulator is a development client for the same relay, so it needs a reachable path to
+`127.0.0.1:8790` on the host. Two paths exist, and only one of them works for the app as shipped.
+
+### Forwarded port (supported)
+
+`adb reverse` forwards a device port to the host, which keeps the app on a loopback URL:
+
+```
+scripts/relay-container-up.sh     # build, start, wait for healthy, set up adb reverse
+scripts/relay-container-down.sh   # stop the stack, drop the forward
+```
+
+`relay-container-up.sh` creates `deploy/.env` from the example when it is missing, starts `volume-init`
+and `relay` from `deploy/compose.yaml`, waits for the container healthcheck (`/health` and `/ready`), then
+repeats both probes from the host before forwarding the port into an attached emulator. `--no-emulator`
+skips the forward; `--with-proxy` also starts Caddy. `relay-container-down.sh` keeps the `relay-data`
+volume (device tokens) unless `--volumes` is passed, and fails if a container labelled with the
+`hermes-talk` project is left behind. Neither script touches another compose project.
+
+### Emulator host alias
+
+The emulator's user-mode network maps `10.0.2.2` to the host loopback, so a plain TCP connection from the
+guest does reach services bound to `127.0.0.1`; `ping 10.0.2.2` answers, and a shell on the device can
+fetch the Hermes API server on port 8642. It does **not** work for this relay in the app:
+
+- `android/app/src/main/res/xml/network_security_config.xml` permits cleartext only for `127.0.0.1`,
+  `localhost` and `::1`. A request to `http://10.0.2.2:8790` is rejected by the platform before a socket
+  is opened, so `HttpHealthProbe` reports a failure; `RelaySettings` validation rejects a non-loopback
+  cleartext URL for the same reason.
+- Over TLS the alias would need a certificate for `RELAY_SITE_ADDRESS` and the internal CA installed as a
+  user CA on the emulator.
+
+That is why the tests use the forwarded loopback port. Note that a raw shell probe with `nc` is not a
+reliable check on this path — the app's `HttpURLConnection` client is the authority.
+
+### TLS entry point
+
+Caddy binds `:443`, and `:80` for the HTTP-to-HTTPS redirect. On a host where another listener already
+owns 443 — `tailscaled` binds its own address, and a wildcard bind conflicts with it — set
+`RELAY_SITE_ADDRESS` to a free port such as `voice.example.lan:8443` and verify the chain with the
+exported root certificate:
+
+```
+docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+curl -fsS --cacert ./caddy-root.crt --resolve voice.example.lan:8443:127.0.0.1 \
+  https://voice.example.lan:8443/health
+```
+
+### Verifying from the emulator
+
+`ContainerRelayProbeTest` drives the app's own `HttpHealthProbe` and `RelayEndpoint` against the forwarded
+port, then reads `/ready` from the device and asserts `status=ready`:
+
+```
+adb reverse tcp:8790 tcp:8790
+cd android && ./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.example.hermestalk.e2e.ContainerRelayProbeTest
+```
+
+Both tests skip with a clear message when nothing answers on 8790, so the suite stays green on a bare
+emulator and in CI. The target URL can be overridden with `-e relayUrl http://<host>:<port>`.
 
 ## Health checks
 

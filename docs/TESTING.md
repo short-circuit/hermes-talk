@@ -202,6 +202,47 @@ against the stub contract today.
   but the PATCH path is effectively a no-op today and would matter as soon as
   the relay runs behind NAT.
 
+## Container relay on the emulator
+
+The baseline above runs against `android/stub-relay`. The production path is the
+committed container stack, and it is reachable from the emulator through a
+forwarded port:
+
+```bash
+scripts/relay-container-up.sh        # compose up --build, wait for healthy, adb reverse
+# ... run the app or the probe test ...
+scripts/relay-container-down.sh      # stop the stack, drop the forward
+```
+
+`ContainerRelayProbeTest` is the acceptance test: it drives the app's own
+`HttpHealthProbe`/`RelayEndpoint` against `http://127.0.0.1:8790` and reads
+`/ready` from inside the emulator. It skips with a clear message when no relay
+answers, so it does not fail on a bare emulator or in CI.
+
+```bash
+cd android && ./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.example.hermestalk.e2e.ContainerRelayProbeTest
+```
+
+Verified on 2026-11-04 on `hermes_talk_34` (API 34, x86_64, `emulator-5554`,
+KVM) with `hermes-talk-relay:local` from `deploy/compose.yaml`:
+
+| Check | Result |
+|---|---|
+| `docker compose ps` relay | `Up (healthy)`; healthcheck probes `/health` and `/ready` |
+| host `/health`, `/ready` | `200` with `{"status":"ready"}` and every check `ok` |
+| `adb reverse tcp:8790 tcp:8790` | in place; the app probe reached the container |
+| `ContainerRelayProbeTest` | `tests="2" failures="0" errors="0" skipped="0"` (0.073 s, 0.078 s) |
+| proxy on `voice.example.lan:8443` | `Up (healthy)`; `/health` and `/ready` return `200` over TLS with the internal CA |
+
+Two limits are worth recording. `/health` only proves liveness: the production
+relay exposes `/health`, `/ready` and `/v1/*` but no RTVI `/start`, so the
+Connected/Ready handshake is still only proven against the stub fixture. And the
+emulator's host alias (`10.0.2.2`) reaches the host loopback at the socket level
+but is unusable for this app over cleartext, because the network security config
+permits cleartext only for loopback names; see `docs/DEPLOYMENT.md` ("Emulator
+access").
+
 ## Fixtures
 
 
