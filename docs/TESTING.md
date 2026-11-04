@@ -61,6 +61,147 @@ adb devices                                   # emulator-5554	device
 adb shell getprop ro.build.version.sdk        # 34
 ```
 
+## Baseline: the current app on the archive emulator
+
+Recorded 2026-11-04 on `hermes_talk_34` (API 34, x86_64, `emulator-5554`, KVM) as
+the pre-P7 reference point: what the app does today, before any P7 feature lands.
+Every figure below is transcribed from that run's own output. The raw capture is
+kept outside the tree (it is not committed, the repository is public) at:
+
+```text
+$XDG_CACHE_HOME/hermes-talk/baseline-2026-11-04/    (default: ~/.cache/hermes-talk/baseline-2026-11-04/)
+```
+
+| File | Contents |
+|---|---|
+| `assembleDebug-clean.log` | `./gradlew clean :app:assembleDebug`, 120 tasks, `BUILD SUCCESSFUL` |
+| `install.log` | `adb install -r app-debug.apk`, `Performing Streamed Install` / `Success` |
+| `permissions.log` | the three `pm grant` calls and the resulting `granted=true` states |
+| `instrumentation.log` | stub relay log plus the full gradle output of the suite |
+| `logcat.txt` | `adb logcat -d -v threadtime` for the test run (6552 lines) |
+| `logcat-crash.txt` | crash buffer; empty, no crash during the run |
+| `junit-results.xml` | the connected-test JUnit report (`tests="20" failures="0" errors="0" skipped="0"`) |
+| `device.txt` | `adb devices`, SDK level, release, ABI, screen size |
+| `run-baseline.sh` | the driver that produced all of the above |
+
+### Toolchain and prerequisites
+
+- JDK 21, Gradle 8.14.3 (wrapper), AGP 8.11.0, Kotlin 2.3.21, `compileSdk` 36,
+  `targetSdk` 34, `applicationId com.example.hermestalk`, versionName 0.1.1.
+- Gradle needs the SDK location: without `ANDROID_HOME`/`ANDROID_SDK_ROOT` (or
+  `android/local.properties`) `:app:assembleDebug` fails with `SDK location not
+  found`. Exporting `ANDROID_HOME` for the shell is enough; no file is written
+  into the tree.
+- `scripts/android-instrumentation.sh` defaults `PYTHON` to `relay-venv/bin/python`,
+  which only CI creates. Locally `PYTHON=$PWD/.venv/bin/python` works: that
+  environment already carries `aiortc` 1.15.0 and `av` 17.1.0, which is all the
+  stub relay imports.
+
+### Reproduce
+
+```bash
+export ANDROID_HOME=$HOME/Android/Sdk ANDROID_SDK_ROOT=$HOME/Android/Sdk
+cd android && ./gradlew clean :app:assembleDebug --console=plain
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell pm grant com.example.hermestalk android.permission.RECORD_AUDIO
+adb shell pm grant com.example.hermestalk android.permission.POST_NOTIFICATIONS
+adb shell pm grant com.example.hermestalk android.permission.BLUETOOTH_CONNECT
+adb logcat -c
+PYTHON=$PWD/.venv/bin/python ../scripts/android-instrumentation.sh
+adb logcat -d -v threadtime > "$XDG_CACHE_HOME/hermes-talk/baseline-2026-11-04/logcat.txt"
+```
+
+### Build and install
+
+`./gradlew clean :app:assembleDebug` → `BUILD SUCCESSFUL in 7s`, 120 actionable
+tasks (59 executed, 61 from cache). APK `android/app/build/outputs/apk/debug/app-debug.apk`,
+124,184,131 bytes. `adb install -r` → `Success`. Runtime permissions granted
+before the run: `RECORD_AUDIO`, `POST_NOTIFICATIONS`, `BLUETOOTH_CONNECT`
+(`granted=true` in `dumpsys package`).
+
+### Instrumentation outcomes
+
+Runner: `AndroidJUnitRunner`, `hermes_talk_34(AVD) - 14`. Gradle reported
+`Starting 20 tests` … `Finished 20 tests` and `BUILD SUCCESSFUL in 45s`; the JUnit
+XML records `tests="20" failures="0" errors="0" skipped="0"` with a suite time of
+33.259 s. Logcat shows a `TestRunner: started:` and `finished:` pair for each of
+the 20, and no `FATAL EXCEPTION` or `E/AndroidRuntime` line.
+
+| Class | Test | Outcome | Time (s) |
+|---|---|---|---|
+| attachments.TokenExpiryTest | artifactListWithExpiredTokenIsReportedNotThrown | passed | 0.004 |
+| attachments.TokenExpiryTest | uploadWithExpiredTokenIsTerminal | passed | 0.000 |
+| attachments.TokenExpiryTest | sessionStartWithExpiredTokenFailsWithoutRetrying | passed | 0.022 |
+| attachments.TokenExpiryTest | expiredTokenIsRejectedByTheLivenessProbe | passed | 0.001 |
+| attachments.UploadRetryTest | queuedUploadResumesAfterProcessRestart | passed | 0.052 |
+| attachments.UploadRetryTest | transientRelayFailuresAreRetriedAndTheUploadCompletes | passed | 0.051 |
+| attachments.UploadRetryTest | unauthorizedUploadIsTerminalAndKeepsThePayloadForManualRetry | passed | 0.081 |
+| call.CallForegroundServiceTest | callSurvivesScreenOffAndReleasesTheMicrophoneWhenEnded | passed | 18.559 |
+| call.CallPermissionTest | deniedPermissionFailsCleanlyAndStopsTheService | passed | 0.855 |
+| call.CallScreenTest | permissionDeniedStateShowsPermissionCardWithoutCrashing | passed | 0.632 |
+| call.CallScreenTest | endButtonInvokesCallback | passed | 0.755 |
+| call.CallScreenTest | activeCallShowsMuteButtonAndInvokesCallback | passed | 0.833 |
+| call.CallScreenTest | batteryPromptIsShownWhenOptimisationIsNeeded | passed | 0.706 |
+| call.CallStateTest | unreachableRelayFailsTheCallAndReleasesEverything | passed | 0.904 |
+| call.CallStateTest | controlActionsAreIgnoredWhileNoCallIsLive | passed | 0.026 |
+| e2e.StubRelayFlowTest | expiredTokenShowsTheUnauthorizedReasonWithoutCrashing | passed | 2.911 |
+| e2e.StubRelayFlowTest | connectsToTheStubRelayAndCompletesACall | passed | 5.544 |
+| wakeword.PushToTalkTest | pressReleaseRequestsASessionAndLeavesNoCaptureRunning | passed | 0.000 |
+| wakeword.WakeWordEngineTest | fixturesDetectAtLeastNinetyPercentAndRejectNegatives | passed | 0.906 |
+| wakeword.WakeWordPermissionTest | deniedPermissionReachesPermissionDeniedWithoutAudioRecord | passed | 0.000 |
+
+### What is *not* covered, and why
+
+Nothing was skipped in this run, and no test is counted as passed on the
+strength of a skip:
+
+- `wakeword.WakeWordBatteryTest` is annotated `@LargeTest` and the suite runs
+  with `notAnnotation=androidx.test.filters.LargeTest`. It is excluded from the
+  20, not passed: it is a 30-minute battery soak that does not fit the
+  CI-budgeted run.
+- `e2e.StubRelayFlowTest.connectsToTheStubRelayAndCompletesACall` is guarded by
+  `Assume.assumeTrue("the stub relay must answer on 127.0.0.1:8790 …")`. It ran
+  and passed here because the stub relay answered `/health` through
+  `adb reverse tcp:8790 tcp:8790`. On a bare emulator without the fixture the
+  runner records it as *skipped* with that message — the XML `skipped` count, not
+  a green testcase, is what to trust.
+- The production relay has no RTVI/WebRTC surface: `relay/app.py` serves `/`,
+  `/health`, `/ready` and `/v1/*` but no `/sessions/*`, so `Connected`/`Ready`
+  can only be proven against `android/stub-relay`. The app's liveness probe is
+  the only part exercised against the real relay shape.
+
+### Stub-relay call flow (real output)
+
+`instrumentation.log` and `logcat.txt` show the fixture and the app agreeing end
+to end. Timestamps are from the run, session ids are the relay's:
+
+1. `21:39:31.646` `SmallWebRTCTransport: connect(.../sessions/02c656a0-…/api/offer, Authorization=Bearer stub-token)` → `Connected` `32.627`, `Ready` `32.628`; relay logged `POST /start` 200, `offer answered`, `bot-ready sent`, `client-ready received`.
+2. `21:39:32.920` `Disconnected` → new session `816c0df0-…`: `Connected` `33.851`, `Ready` `33.852`; the relay logged `received audio track` + `received video track` for both sessions and counted 500 audio frames on the `fd5e307b-…` call before it was replaced.
+3. Mute/unmute round-trip visible server-side as RTVI signalling on the `chat`
+   channel: `trackStatus receiver_index=0 enabled=true`, `…enabled=false`,
+   `…enabled=true` (`21:39:33.921`–`34.146`).
+4. `21:39:34.305` `Disconnected`, relay logged `datachannel closed` / `audio track ended`.
+
+So the call state machine, the RTVI handshake and the control messages work
+against the stub contract today.
+
+### Observations for P7 (baseline facts, not failures)
+
+- The client never issues `DELETE /sessions/{id}`: no `DELETE` line appears in
+  `instrumentation.log`, and the app sources contain no `delete(` call. Teardown
+  relies on closing the peer connection, so the relay keeps its session entry
+  until it is told otherwise.
+- `CallPermissionTest` reaches `Ready` before the denial is injected
+  (`21:39:23.483`), then fails the call; that transport stayed `Ready` and the
+  relay kept counting audio frames until the next test replaced the singleton
+  transport at `21:39:32.920` (`setState(Disconnected)`).
+- Every trickle candidate the client PATCHes is rejected by the fixture with
+  `candidate ignored: Candidate must have either sdpMid or sdpMLineIndex`
+  (12 + 4 candidates per session). The handshake still completes because the
+  fixture gathers ICE before answering, so loopback does not depend on trickle —
+  but the PATCH path is effectively a no-op today and would matter as soon as
+  the relay runs behind NAT.
+
 ## Fixtures
 
 
