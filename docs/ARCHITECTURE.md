@@ -87,6 +87,7 @@ app does not mount it. The call loop calls the gateway's `/v1/runs` through `rel
 | Call lifecycle | `android/app/call/src/main/java/com/example/hermestalk/call/` | `CallMachine`, `CallController`, `CallSession`, `CallForegroundService`, `AudioFocusController`, `CallAudioRoutePlanner`, `CallScreen` | WIRED |
 | RTVI transport client | `android/rtvi/src/main/java/com/example/hermestalk/rtvi/` | `RtviSession.connect`, `RelayEndpoint.startUrl`, `HealthProbe`, `TlsTrust` (SPKI pinning), `TokenStore` (EncryptedSharedPreferences), `ConnectionMachine`, `SessionWatchdog` | WIRED |
 | Wake word | `android/wakeword/src/main/java/com/example/hermestalk/wakeword/` | `WakeWordEngine`, `WakeWordMachine`, `PushToTalkController`, `DetectionGate`, sherpa-onnx KWS model under `android/app/src/main/assets/wakeword/` | WIRED |
+| Persistent assistant | `android/app/call/src/main/java/com/example/hermestalk/call/` | `PersistentAssistantService`, `PersistentAssistant`, `PersistentAssistantController`, `AssistantWakeWordRunner`, `AssistantWakeWordPolicy`, `AssistantMicCoordinator`, `AssistantLaunch`, `BootReceiver` | WIRED |
 | Attachments client | `android/attachments/src/main/java/com/example/hermestalk/attachments/` | `ShareIntent`, `Ingest`, `UploadQueueStore`, `UploadEngine`, `RetryPolicy`, `ArtifactClient`, `AttachmentPanel` | WIRED |
 | Stub relay | `android/stub-relay/relay.py` | SmallWebRTC/RTVI signalling fixture: `/start`, `/sessions/{id}/api/offer`, trickle ICE, `DELETE /sessions/{id}` | FIXTURE |
 
@@ -272,6 +273,63 @@ The gate never reads tool output as consent, and narration can never approve. Th
 requires (section 5.5). `HermesClient.approval(run_id, request_id=..., execution_generation=...,
 choice=...)` posts exactly those three keys to `POST /v1/runs/{run_id}/approval` and tolerates a `409`
 (run already settled); the adapter also reads `pending_controls` from `GET /v1/runs/{id}`.
+
+### 3.5 Persistent assistant service lifecycle
+
+The always-on assistant is a second foreground service in `:app:call`, separate from
+`CallForegroundService`, which stays call-scoped. It is opt-in: the plain preference
+`hermes_talk_persistent` / `assistant_enabled` (default `false`) is written by the Settings toggle and
+read by `BootReceiver`. Plain rather than encrypted storage is deliberate — the boot receiver runs
+before the user unlocks, so `LOCKED_BOOT_COMPLETED` is not handled.
+
+```
+ disabled --toggle on--> Starting(foreground) --mic type accepted--> Foreground(Microphone)
+                                    \--mic refused--> Foreground(SpecialUse)
+ Foreground(Microphone) --wake word enabled--> Listening (partial wake lock held)
+ Listening --call starts--> listening=false (mic owned by CallForegroundService, lock released)
+ listening=false --call ends--> Foreground(Microphone) / Listening
+ any state --toggle off / ACTION_STOP--> Stopped (notification removed, lock released)
+ any state --process killed--> START_STICKY restart
+ BOOT_COMPLETED (opt-in) --> Starting(background) --mic refused--> Foreground(SpecialUse)
+ Foreground(SpecialUse) --app visible / ACTION_PROMOTE_MIC--> Foreground(Microphone)
+```
+
+Start paths are `PersistentAssistantController.startFromForeground` (Settings toggle and app resume),
+`promoteToMicrophone` (`ACTION_PROMOTE_MIC` on resume) and `BootReceiver` (`BOOT_COMPLETED`,
+`MY_PACKAGE_REPLACED`). `PersistentAssistant.attemptOrder` returns the foreground types to try in order:
+no typed start below API 29, otherwise microphone then special use when `RECORD_AUDIO` is granted, and
+special use alone without it. `PersistentAssistantService` calls `startForeground` on every
+`onStartCommand`, records a rejected microphone attempt in `PersistentAssistant.state.micRefusal`, and
+retries special use inside the same call so the five-second window is not missed. The service returns
+`START_STICKY`, keeps running in `onTaskRemoved`, declares `stopWithTask="false"`, and releases its
+wake lock in `onDestroy`.
+
+The microphone has exactly one owner at a time. `AssistantWakeWordPolicy.micOwner` grants capture to
+the wake word only when a call is not live, the wake-word and assistant toggles are on, `RECORD_AUDIO`
+is granted and the service holds the microphone foreground type; a live call wins unconditionally.
+`ProcessAssistantMicCoordinator.suspendWakeWord` stops capture before the call service starts and
+`resumeWakeWord` restarts it after the call ends. The partial wake lock
+(`hermes_talk:assistant-listening`) is non-reference-counted, has no timeout, and is held only while the
+controller reports `Listening`; every other state, and every live call, releases it.
+
+A detection runs the fixed `AssistantDetectionStep` sequence — stop capture, release the listening wake
+lock, abandon audio focus, clear the communication device, leave communication mode, launch
+`ACTION_ASSIST` — and `AssistantWakeWordPolicy.DETECTION_TO_CALL_BUDGET_MILLIS` bounds the measured
+detection-to-call-screen time at 1000 ms.
+
+The platform constrains the background path. API 34 refuses a microphone foreground service started
+from `BOOT_COMPLETED` (`ForegroundServiceStartNotAllowedException` per the release notes; the API 34
+image raised `SecurityException`), so a boot-started service holds `specialUse` and wake-word capture
+stays paused until the app is visible and promotes it to `microphone`. A foreground service is also not
+a background-activity-launch exemption, so `AssistantLaunch` may fail to open the call screen from the
+background; it records `AssistantLaunchResult.started=false` with the failure text, and the foreground
+notification's content intent is the one-tap fallback.
+
+Observability is in-process only: `PersistentAssistant.state` exposes `running`, `foregroundType`,
+`listening`, `wakeLockHeld`, `micRefusal` and `startedAtMillis`; the Settings screen renders
+`Running (microphone)`, `Running (special use)`, `Listening` or `Not running` and shows the recorded
+refusal. No audio, transcript or state leaves the device on this path. `docs/RUNBOOK.md` section 12 has
+the operator commands and `docs/TESTING.md` the measured soak, swipe and reboot results.
 
 ## 4. Relay ↔ Hermes contract
 
@@ -539,6 +597,7 @@ repository itself free of personal paths, LAN addresses and secrets.
 | Change the Hermes adapter | `relay/hermes/*` | `test_hermes_adapter.py`, `test_runs.py`, fixtures under `relay/tests/fixtures/` |
 | Change retention | `relay/maintenance/*`, `relay/logging/retention.py` | `test_retention.py` |
 | Change the Android call flow | `android/app/call/*`, `android/rtvi/*` | `android/*/src/test/`, instrumentation suite |
+| Change the persistent assistant or wake-word capture | `android/app/call/PersistentAssistant*.kt`, `AssistantWakeWord*.kt`, `AssistantMicCoordinator.kt`, `AssistantLaunch.kt`, `BootReceiver.kt` | `android/app/call/src/test/`, `PersistentAssistantServiceTest`, `AssistantWakeWordServiceTest` |
 | Change the RTVI signalling fixture | `android/stub-relay/relay.py` | `android/rtvi/src/test/` |
 
 Fixtures are synthetic and committed under `relay/tests/fixtures/`; the Hermes replay stub is
@@ -560,3 +619,6 @@ because `relay/logging` shadows the stdlib `logging` package when the working di
    boundary; spoken text rewrites home prefixes; the repository contains neither.
 7. **Loopback only.** The relay and every model server bind `127.0.0.1`; the proxy is the sole LAN
    entry point.
+8. **One microphone owner.** A live call owns the microphone unconditionally; wake-word capture stops
+   before the call service starts and resumes only after the call ends and the service holds the
+   microphone foreground type.

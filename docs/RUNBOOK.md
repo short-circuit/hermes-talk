@@ -3,6 +3,8 @@
 Day-2 operations for a deployed Hermes Talk relay. This document assumes the host was installed with
 either `deploy/compose.yaml` or `deploy/hermes-talk.service`; installation, topology, the port table,
 upgrades, rollback, and the full retention reference are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+Sections 12 and 13 cover the paired Android device: the assistant role, the battery exemption, boot
+start, and `dumpsys` troubleshooting.
 
 Use one deployment path at a time. The compose stack and the systemd unit both bind `127.0.0.1:8790`;
 running both produces an address-in-use failure.
@@ -44,8 +46,9 @@ proxy configuration changes.
 LLM endpoint. Model downloads happen during installation, never during a call.
 
 **First start.** On a fresh install, use this order: section 1 (prerequisites), section 2 (start),
-section 5 (issue the first token), section 3 (health and TLS smoke), section 4 (warm the models), then
-one call from the phone. On an existing install, start at section 2.
+section 5 (issue the first token), section 3 (health and TLS smoke), section 4 (warm the models),
+section 12 (device setup: assistant role, battery exemption, boot start), then one call from the phone.
+On an existing install, start at section 2.
 
 ## 1. Before the first start
 
@@ -665,7 +668,215 @@ its next run opens a fresh connection.
 | New relay image | build/up or systemctl restart | relay | yes |
 | Host reboot | all services | gateway and relay | yes |
 
-## 12. Handover checklist
+## 12. Android device: assistant role, battery exemption and boot start
+
+These steps are device-side; the relay does not need them. They make the assistant reachable from the
+power-button gesture and keep it alive across screen-off, task swipe and reboot. The reference platform
+is the API 34 `hermes_talk_34` AVD (x86_64, Google APIs); API-level differences are called out where
+they matter. Commands below use the default serial — add `-s <serial>` when more than one device is
+attached.
+
+Prerequisites:
+
+```sh
+adb devices                                             # <serial>  device
+adb shell getprop ro.build.version.sdk                  # 34 on the reference AVD
+adb shell pm list packages com.example.hermestalk       # package:com.example.hermestalk
+adb shell pm grant com.example.hermestalk android.permission.RECORD_AUDIO
+adb shell pm grant com.example.hermestalk android.permission.POST_NOTIFICATIONS
+adb shell pm grant com.example.hermestalk android.permission.BLUETOOTH_CONNECT
+```
+
+`pm grant` is silent on success and idempotent, so it is safe to re-run after every install.
+
+### 12.1 Default assistant role
+
+The app declares an `ACTION_ASSIST` entry point. Two ways to make it the default assistant:
+
+- **UI.** System Settings → Apps → Default apps → Digital assistant app → Hermes Talk. The in-app
+  **Set as default assistant** button on the Settings screen opens the system dialog instead. On
+  images that mark `android.app.role.ASSISTANT` as `requestable=false` (the Google-APIs API 34 image
+  does), the request activity logs `Role is not requestable` and returns `RESULT_CANCELED`; use the
+  shell grant below.
+- **Shell.**
+
+```sh
+adb shell cmd role add-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell cmd role get-role-holders android.app.role.ASSISTANT
+adb shell settings get secure assistant
+```
+
+Expected: the first command exits 0 with no output; the second prints `com.example.hermestalk`; the
+third prints `com.example.hermestalk/.MainActivity`.
+
+Verify the gesture (219 is `KEYCODE_ASSIST`):
+
+```sh
+adb shell input keyevent 219
+adb shell dumpsys activity activities | grep -E 'topResumedActivity'
+```
+
+Expected: `topResumedActivity=ActivityRecord{… com.example.hermestalk/.MainActivity …}`.
+
+Verify the not-held path and the explicit entry point:
+
+```sh
+adb shell cmd role remove-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell cmd role get-role-holders android.app.role.ASSISTANT   # the image's preinstalled assistant
+adb shell am start -a android.intent.action.ASSIST -n com.example.hermestalk/.MainActivity
+```
+
+After a revoke the gesture follows the new holder; on the reference image that is
+`com.google.android.googlequicksearchbox`. The explicit intent still opens Hermes Talk.
+
+| Command | Observed on `hermes_talk_34` (API 34) |
+|---|---|
+| `cmd role add-role-holder … com.example.hermestalk` | exit 0; `get-role-holders` lists `com.example.hermestalk`; `settings get secure assistant` = `com.example.hermestalk/.MainActivity` |
+| `input keyevent 219` | `MainActivity` becomes `topResumedActivity` |
+| `cmd role remove-role-holder …` | holder becomes `com.google.android.googlequicksearchbox`; the gesture opens that app |
+| in-app request button on this image | permission controller logs `Role is not requestable: android.app.role.ASSISTANT`, returns `RESULT_CANCELED`, the card stays `NotHeld` |
+
+Two persistence rules matter:
+
+- **Uninstalling the app drops the role.** A reinstall (including the APKs a `connectedAndroidTest`
+  run installs and then removes) clears the holder; re-grant it afterwards.
+- **The grant needs a moment to settle.** A reboot issued immediately after `add-role-holder` can lose
+  it and the platform falls back to the preinstalled assistant. Wait a few seconds, confirm with
+  `get-role-holders`, and re-check after any reboot.
+
+### 12.2 Battery exemption
+
+Without the exemption Doze can freeze the process in deep idle. The app shows **Allow background
+activity** on the Settings screen when it is not exempt; that button opens the system exemption dialog
+(system Settings → Apps → Special app access → Battery optimisation → Hermes Talk → Don't optimise).
+From a development machine:
+
+```sh
+adb shell dumpsys deviceidle whitelist +com.example.hermestalk   # Added: com.example.hermestalk
+adb shell dumpsys deviceidle whitelist | grep hermestalk         # user,com.example.hermestalk,<uid>
+adb shell dumpsys deviceidle whitelist -com.example.hermestalk   # Removed: com.example.hermestalk
+```
+
+Reinstalling the app changes its uid and drops the whitelist entry, so re-check it after every install.
+
+### 12.3 Boot start
+
+1. Enable the assistant: app Settings → **Background assistant** → **Keep assistant running**. The
+   status line reads `Running (microphone)` while the app is visible. This is the opt-in the boot
+   receiver reads; the flag is the plain preference `hermes_talk_persistent` /
+   `assistant_enabled`, default off. Inspect it with:
+
+```sh
+adb shell run-as com.example.hermestalk cat shared_prefs/hermes_talk_persistent.xml
+```
+
+2. Confirm the service state before rebooting:
+
+```sh
+adb shell dumpsys activity services com.example.hermestalk \
+  | grep -E 'isForeground|startCommandResult|createdFromFg|types='
+```
+
+Expected while the app is visible: `isForeground=true … types=00000080` (microphone),
+`createdFromFg=true`, `startCommandResult=1` (START_STICKY).
+
+3. Reboot and verify the boot path:
+
+```sh
+adb reboot
+# wait for sys.boot_completed=1; on the archive AVD: scripts/emulator-archive.sh wait-for-boot
+adb shell dumpsys activity services com.example.hermestalk \
+  | grep -E 'isForeground|startCommandResult|createdFromFg|allowStartForeground|mAllowWhileInUse|types='
+adb logcat -d -v brief | grep -E 'PersistentAssistantBoot|PersistentAssistant:'
+```
+
+Expected: `types=40000000` (specialUse), `createdFromFg=false`, `startCommandResult=1`,
+`mAllowWhileInUsePermissionInFgsReason=DENIED`; `allowStartForeground` is `BOOT_COMPLETED` or
+`SYSTEM_ALLOW_LISTED` depending on how the boot allow-list resolves — do not rely on that field alone.
+Logcat shows:
+
+```
+I/PersistentAssistantBoot: android.intent.action.BOOT_COMPLETED received; persistent assistant start requested
+W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.example.hermestalk/.call.PersistentAssistantService
+W PersistentAssistant: Microphone foreground type refused (java.lang.SecurityException: … falling back
+```
+
+This is the documented API 34 rule, not a defect: a microphone foreground service cannot start from
+`BOOT_COMPLETED`. The service retries with `specialUse` inside the same `onStartCommand`, so it is
+alive after boot — but wake-word capture is paused because capture requires the microphone type. The
+app promotes the service to `microphone` on resume:
+
+```sh
+adb shell am start -n com.example.hermestalk/.MainActivity
+adb shell dumpsys activity services com.example.hermestalk | grep -E 'mAllowWhileInUse|types='
+```
+
+Expected: `mAllowWhileInUsePermissionInFgsReason=PROC_STATE_TOP` and `types=00000080`.
+
+4. Verify the sticky restart:
+
+```sh
+pid=$(adb shell pidof com.example.hermestalk | tr -d '\r')
+adb shell run-as com.example.hermestalk kill -9 "$pid"
+sleep 5
+adb shell pidof com.example.hermestalk   # a new pid
+adb shell dumpsys activity services com.example.hermestalk | grep -E 'isForeground|startCommandResult'
+```
+
+Toggling **Keep assistant running** stops and starts the assistant service; it does not touch the
+relay. If a call is live the call owns the microphone and is unaffected, but say so before toggling.
+
+### 12.4 Order for a new device
+
+1. Install the APK and grant `RECORD_AUDIO`, `POST_NOTIFICATIONS`, `BLUETOOTH_CONNECT`.
+2. Grant the assistant role and verify the gesture (12.1).
+3. Whitelist battery optimisation (12.2).
+4. Enable **Keep assistant running** and confirm `Running (microphone)` (12.3).
+5. Reboot once and confirm the service returns with `types=40000000`, then open the app and confirm the
+   promotion to `types=00000080`.
+6. Issue the device token (section 5), enter the relay URL and token in the app, and place one call.
+
+## 13. Device troubleshooting with dumpsys
+
+Read the state before changing anything. `dumpsys activity services` is the authoritative view of the
+service the platform actually started:
+
+| Field | Meaning | Healthy value |
+|---|---|---|
+| `isForeground` / `types=` | foreground service type held | `00000080` (microphone) while visible; `40000000` (specialUse) after a background start |
+| `startCommandResult=1` | `START_STICKY` | 1 |
+| `createdFromFg` | started from a visible context | `true` from the app, `false` from `BOOT_COMPLETED` |
+| `allowStartForeground` | why the platform allowed the start | `BOOT_COMPLETED`, `PROC_STATE_TOP` or `SYSTEM_ALLOW_LISTED` |
+| `mAllowWhileInUsePermissionInFgsReason` | microphone-type eligibility | `PROC_STATE_TOP` when promoted; `DENIED` in the background |
+
+Supporting commands:
+
+```sh
+adb shell dumpsys power | grep -A2 'Wake Locks'          # size=0 unless wake-word capture is listening
+adb shell dumpsys deviceidle | grep -E 'mState=|mLightState='   # ACTIVE; IDLE only while forced or dozing
+adb shell dumpsys deviceidle whitelist | grep hermestalk        # user,com.example.hermestalk,<uid>
+adb shell cmd role get-role-holders android.app.role.ASSISTANT
+adb shell settings get secure assistant
+adb shell logcat -d -v brief | grep -E 'PersistentAssistant|AssistantWakeWord|ActivityManager: Foreground'
+```
+
+Symptoms and fixes:
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Service missing from `dumpsys activity services` | toggle off, app not started since boot, or boot receiver filtered out | enable **Keep assistant running**, launch the app, re-check after a reboot |
+| `types=40000000` right after boot | expected API 34 microphone refusal | open the app; the resume path promotes to microphone |
+| `types=40000000` while the app is visible | promotion refused — `RECORD_AUDIO` revoked or the app is not top | re-grant `RECORD_AUDIO`, bring the app to the foreground |
+| `Wake Locks: size=1` (or more) with `listening=false` | wake-lock leak | the status line should read `Running`, not `Listening`; the instrumentation suite asserts the lock is released. If it stays held, file a card |
+| Service gone after swiping the task away | `stopWithTask` is `true` in the merged manifest | confirm `stopWithTask="false"`; reinstall if the manifest is stale |
+| Service disappears after Doze | app not battery-exempt | whitelist it (12.2) |
+| `Role is not requestable` in logcat | image marks the role non-requestable | shell grant (12.1) |
+| `keyevent 219` opens another app | another package holds the role | `get-role-holders`; re-grant and wait before rebooting |
+| Role reverts after reboot | grant not persisted, or the app was reinstalled | re-grant, confirm, then reboot |
+| Wake word never fires | toggle off, `RECORD_AUDIO` missing, or the service holds `specialUse` | enable the toggle, grant the permission, open the app to promote |
+| Detection does not open the call screen | background-activity launch refused; `AssistantLaunchResult.started=false` | use the notification's content intent; the failure is recorded with its message |
+
+## 14. Handover checklist
 
 - [ ] Relay is active and `/health` and `/ready` return 200.
 - [ ] Hermes and voice-brain `/health` return 200.
@@ -677,6 +888,10 @@ its next run opens a fresh connection.
 - [ ] No `retention.error` in the audit trail since the last run.
 - [ ] The deployed image tag, `.env` location and mode, site address, and backup destination are
       recorded in the handover note.
+- [ ] On the paired device: the assistant role is held, `KEYCODE_ASSIST` opens the call screen, and
+      battery optimisation is whitelisted (section 12).
+- [ ] The persistent assistant is either enabled and confirmed back after a reboot, or deliberately
+      off — record which.
 
 ## References
 

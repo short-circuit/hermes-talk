@@ -16,7 +16,10 @@ home partition:
 | Part | Location |
 |---|---|
 | emulator binary, platform-tools, system image | `$ANDROID_SDK_ROOT` (default `$HOME/Android/Sdk`) |
-| AVD `hermes_talk_34` (config, 6 GiB data partition, snapshots) | `$ANDROID_AVD_HOME` (default `/store/archive/android-avd`) |
+| AVD `hermes_talk_34` (config, 6 GiB data partition, snapshots) | `$ANDROID_AVD_HOME` (default `/store/archive/android-avd` on the reference host) |
+
+Set `ANDROID_AVD_HOME` to any directory with room for the 6 GiB data partition;
+nothing in the script or the repository hard-codes a home path.
 
 The split is deliberate: the home partition runs at ~94% capacity while the
 archive volume has over a terabyte free, and the userdata image grows with
@@ -313,6 +316,14 @@ transcript, the `bot-llm-text` and `bot-tts-started` messages in one event-loop
 tick before synthesising. The audio byte count varies with the reply text
 (the clock reading changes between runs), so it is not a fixed fixture value.
 
+Re-verified on 2026-11-05 18:45 on the same AVD while writing the handoff docs:
+`tests="1" failures="0" errors="0" skipped="0"`, `endpointing+stt=1532 ms`,
+`brain=0 ms`, `tts_start=0 ms`, `tts_audio_report=1431 ms`,
+`tts_audio=163200 B/1700.0 ms`, transcript `WHAT TIME IS IT`, reply
+`It's 17:45.`, and `verify: PASSED — every required case ran and passed,
+nothing was skipped`. The relay container had been running for four hours and
+was left alone; the script only issued and revoked a token.
+
 ### Failure semantics
 
 The test **fails, it does not skip**, when the container is unreachable. Verified
@@ -517,6 +528,17 @@ instrumentation process.
 | Promotion once visible | launch `MainActivity` | `types=00000080` (microphone), `mAllowWhileInUsePermissionInFgsReason=PROC_STATE_TOP`, Settings shows `Running (microphone)` |
 | Battery exemption UI | Settings card | the exemption button and hint disappear once `isIgnoringBatteryOptimizations` is true; the card otherwise offers **Allow background activity** |
 | Doze whitelist command | `dumpsys deviceidle whitelist +com.example.hermestalk` | `Added: com.example.hermestalk`, listed as `user,com.example.hermestalk,10250` |
+
+The copy-paste operator procedure for these checks, with the expected values and
+the `dumpsys` field reference, is in `docs/RUNBOOK.md` section 12. Re-verified
+there on 2026-11-05 after a fresh install: the toggle wrote
+`assistant_enabled=true`, the visible start held `types=00000080`, the boot
+start held `types=40000000` with `createdFromFg=false`,
+`mAllowWhileInUsePermissionInFgsReason=DENIED` and the documented refusal in
+logcat, opening the app promoted the service back to `types=00000080` with
+`PROC_STATE_TOP`, and `kill -9` produced a new pid with the service foreground
+again. Reinstalling the app cleared both the assistant role and the Doze
+whitelist entry, which the procedure re-applies.
 
 ### Battery cost
 
