@@ -596,3 +596,130 @@ cd android
 
 `@LargeTest` marks the wake-word battery run, which defaults to 60 minutes; CI
 excludes that annotation and shortens the screen-off call window instead.
+
+## Always-on assistant service: screen-off, task swipe and reboot
+
+The persistent assistant lives in `:app:call` next to the call service:
+`PersistentAssistantService.kt` (the service), `PersistentAssistant.kt`
+(policy, process-wide state and the controller), `PersistentAssistantSettingsStore.kt`
+(the plain opt-in store) and `BootReceiver.kt` (BOOT_COMPLETED and
+MY_PACKAGE_REPLACED). It is separate from `CallForegroundService`, which remains
+call-scoped and unchanged.
+
+### Manifest facts
+
+- The service declares `foregroundServiceType="microphone|specialUse"`,
+  `stopWithTask="false"` and `exported="false"`, with
+  `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` describing always-on on-device wake-word
+  listening for the local assistant.
+- The app declares `RECEIVE_BOOT_COMPLETED` and
+  `FOREGROUND_SERVICE_SPECIAL_USE` in addition to the existing microphone
+  foreground-service permission.
+- The boot receiver is `exported="true"` with both `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED` filters. `LOCKED_BOOT_COMPLETED` is not handled because
+  the opt-in flag lives in credential-protected plain SharedPreferences
+  (`hermes_talk_persistent`, key `assistant_enabled`, default off).
+
+The service returns `START_STICKY`, enters the foreground on every
+`onStartCommand`, keeps running in `onTaskRemoved`, and releases its partial wake
+lock in `onDestroy`. The wake lock (`hermes_talk:assistant-listening`) is
+non-reference-counted, has no timeout and is held only while the wake-word
+controller is in `WakeWordState.Listening`; it is released for every other state
+and while a call is live.
+
+### Android 14 microphone foreground-service rule
+
+Apps targeting API 34+ cannot start a **microphone** foreground service from a
+`BOOT_COMPLETED` receiver; the system throws
+`ForegroundServiceStartNotAllowedException`. The documented fallback is to start
+with the `specialUse` type when the microphone type is unavailable and promote
+to `microphone` once the app is visible
+(see `developer.android.com/about/versions/15/behavior-changes-15#fgs-boot-completed`
+and `.../fgs/restrictions-bg-start#wiu-restrictions`).
+
+This implementation follows that rule exactly:
+
+1. When `RECORD_AUDIO` is granted on API 29+, the service first calls
+   `startForeground(id, notification, FOREGROUND_SERVICE_TYPE_MICROPHONE)`.
+2. On `ForegroundServiceStartNotAllowedException`, `SecurityException` or
+   `IllegalStateException` it records the exception class and message in
+   `PersistentAssistant.state.micRefusal`, logs it with `Log.w`, and retries
+   synchronously with `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` so it never misses
+   the 5-second startForeground window.
+3. Without `RECORD_AUDIO`, or on API < 29, it goes straight to `specialUse`
+   (plain `startForeground` on API < 29).
+4. `ACTION_PROMOTE_MIC` is sent from the app's `ON_RESUME`; a successful retry
+   clears the refusal and updates the notification text.
+
+The Settings card shows `Running (microphone)`, `Running (special use)`,
+`Listening` or `Not running`, and displays the refusal hint with the recorded
+exception when `micRefusal` is set. Test tags are `settings_persistent_toggle`,
+`settings_persistent_status`, `settings_persistent_mic_refused` and
+`settings_persistent_battery`.
+
+### Battery exemption
+
+The Settings card reuses the existing `BatteryOptimisation` interface from
+`:app:call`. When the app is not exempt, it shows **Allow background activity**,
+which opens the system exemption UI. Battery optimisation must be off for the
+assistant to survive Doze; verify or change the whitelist from a development
+machine:
+
+```sh
+adb shell dumpsys deviceidle whitelist +com.example.hermestalk
+adb shell dumpsys deviceidle whitelist | grep hermestalk
+adb shell dumpsys deviceidle whitelist -com.example.hermestalk
+```
+
+### Instrumentation checks
+
+`PersistentAssistantServiceTest` covers the empirical rule and the soak:
+
+```sh
+adb shell am instrument -w \
+  -e class com.example.hermestalk.persistent.PersistentAssistantServiceTest \
+  -e persistentSoakSeconds 600 \
+  com.example.hermestalk.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+`backgroundStartUsesThePlatformAllowedForegroundType` presses Home, starts the
+service and asserts the type the platform actually allowed: `SpecialUse` with a
+non-null refusal when the API 34 background rule fires, or `Microphone` when
+`am instrument` grants the process background-activity-start privileges. The
+dumpsys check accepts either the symbolic name or the API 34 bit mask.
+Instrumentation's privilege can mask the real refusal on an emulator, so the
+deterministic microphone→specialUse fallback is covered by
+`PersistentAssistantPolicyTest.fallbackUsesSpecialUseAfterAMicrophoneRefusal`.
+The foreground test asserts the microphone type and the listening-scoped wake
+lock. The soak test turns the screen off, forces Doze for
+`persistentSoakSeconds` (default 600), and verifies the same pid and microphone
+type before unforcing Doze and waking the screen.
+
+### Measured boot behaviour on the archive AVD (API 34)
+
+The refusal is not an assumption: it was reproduced on `hermes_talk_34` with
+`adb reboot` and the opt-in flag enabled. The boot receiver started the service,
+and logcat recorded the platform refusing the microphone type:
+
+```
+W ActivityManager: Foreground service started from background can not have
+  location/camera/microphone access: service
+  com.example.hermestalk/.call.PersistentAssistantService
+W PersistentAssistant: Microphone foreground type refused
+  (java.lang.SecurityException: Starting FGS with type microphone …
+  targetSDK=34 … and the app must be in the eligible state/exemptions to
+  access the foreground only permission); falling back
+```
+
+The platform raised `SecurityException` here, not the
+`ForegroundServiceStartNotAllowedException` the Android 15 release notes name;
+the service catches both. `dumpsys activity services` then reported
+`isForeground=true … types=40000000` (specialUse), `startCommandResult=1`
+(START_STICKY), `createdFromFg=false`, `allowStartForeground=BOOT_COMPLETED`,
+`uidState: RCVR`, and `mAllowWhileInUsePermissionInFgsReason=DENIED` — the
+service came back with no user launch. Launching `MainActivity` promoted it to
+`types=00000080` (microphone) with
+`mAllowWhileInUsePermissionInFgsReason=PROC_STATE_TOP`. A
+`run-as … kill -9` of the process was followed by a sticky restart (new pid,
+specialUse again while backgrounded). Measured soak, swipe, reboot and battery
+numbers are in `docs/TESTING.md`.

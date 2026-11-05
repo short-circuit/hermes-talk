@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
             val uploads by appViewModel.uploadItems.collectAsStateWithLifecycle()
             val artifactState by appViewModel.artifactState.collectAsStateWithLifecycle()
             val attachmentError by appViewModel.attachmentError.collectAsStateWithLifecycle()
+            val persistentState by appViewModel.persistentState.collectAsStateWithLifecycle()
             var screen by rememberSaveable { mutableStateOf(AppScreen.Settings) }
 
             val sharedIntent by pendingShare
@@ -89,6 +90,12 @@ class MainActivity : ComponentActivity() {
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 appViewModel.onWakeWordPermissionResult(granted)
+            }
+
+            val persistentPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                appViewModel.setPersistentAssistantEnabled(granted)
             }
 
             val batteryLauncher = rememberLauncherForActivityResult(
@@ -142,6 +149,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val setPersistentAssistantEnabled: (Boolean) -> Unit = { enabled ->
+                if (
+                    enabled &&
+                    ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    persistentPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    appViewModel.setPersistentAssistantEnabled(enabled)
+                }
+            }
+
             var assistantRoleState by remember {
                 mutableStateOf(AssistantRole.state(this))
             }
@@ -168,6 +189,9 @@ class MainActivity : ComponentActivity() {
                         if (assistantRoleState == AssistantRoleState.Held) {
                             roleRequestRefused = false
                         }
+                        appViewModel.promotePersistentAssistantMicrophone()
+                        appViewModel.refreshPersistentAssistantState()
+                        appViewModel.refreshBatteryExemption()
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -213,6 +237,8 @@ class MainActivity : ComponentActivity() {
                     requestCallMicPermission = requestCallMicPermission,
                     requestBatteryExemption = requestBatteryExemption,
                     setWakeWordEnabled = setWakeWordEnabled,
+                    setPersistentAssistantEnabled = setPersistentAssistantEnabled,
+                    persistentState = persistentState,
                     assistantRoleState = assistantRoleState,
                     assistantRoleRequestRefused = roleRequestRefused,
                     onRequestAssistantRole = onRequestAssistantRole,
@@ -253,6 +279,8 @@ private fun AppRoot(
     requestCallMicPermission: () -> Unit,
     requestBatteryExemption: () -> Unit,
     setWakeWordEnabled: (Boolean) -> Unit,
+    setPersistentAssistantEnabled: (Boolean) -> Unit,
+    persistentState: com.example.hermestalk.call.PersistentAssistantState,
     assistantRoleState: AssistantRoleState,
     assistantRoleRequestRefused: Boolean,
     onRequestAssistantRole: () -> Unit,
@@ -274,6 +302,11 @@ private fun AppRoot(
             assistantRole = assistantRoleState,
             assistantRoleRequestRefused = assistantRoleRequestRefused,
             onRequestAssistantRole = onRequestAssistantRole,
+            persistentEnabled = uiState.persistentEnabled,
+            batteryExempt = uiState.batteryExempt,
+            persistentState = persistentState,
+            onPersistentEnabledChange = setPersistentAssistantEnabled,
+            onRequestBatteryExemption = requestBatteryExemption,
         )
 
         AppScreen.Connection -> ConnectionScreen(

@@ -9,9 +9,15 @@ import androidx.lifecycle.viewModelScope
 import com.example.hermestalk.attachments.ArtifactUiState
 import com.example.hermestalk.attachments.Attachments
 import com.example.hermestalk.attachments.UploadItem
+import com.example.hermestalk.call.AndroidBatteryOptimisation
 import com.example.hermestalk.call.AudioRoute
 import com.example.hermestalk.call.CallControllers
 import com.example.hermestalk.call.CallUiState
+import com.example.hermestalk.call.PersistentAssistant
+import com.example.hermestalk.call.PersistentAssistantController
+import com.example.hermestalk.call.PersistentAssistantSettingsStore
+import com.example.hermestalk.call.PersistentAssistantState
+import com.example.hermestalk.call.SharedPreferencesPersistentAssistantSettingsStore
 import com.example.hermestalk.call.isLive
 import com.example.hermestalk.rtvi.ConnectionState
 import com.example.hermestalk.rtvi.EncryptedTokenStore
@@ -86,6 +92,8 @@ data class AppUiState(
     val wakeWordState: WakeWordState = WakeWordState.Off,
     val lastWakeWord: String? = null,
     val falseTriggerCount: Int = 0,
+    val persistentEnabled: Boolean = false,
+    val batteryExempt: Boolean = false,
 )
 
 /**
@@ -136,6 +144,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val callController = CallControllers.get(application)
     private val attachmentsController = Attachments.get(application)
     private val wakeWordSettingsStore = SharedPreferencesWakeWordSettingsStore(application)
+    private val persistentSettings: PersistentAssistantSettingsStore =
+        SharedPreferencesPersistentAssistantSettingsStore(application)
+    private val batteryOptimisation = AndroidBatteryOptimisation(application)
     private val wakeWordController = WakeWordController.create(
         application,
         onWakeWord = {
@@ -152,6 +163,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Observable wake-word lifecycle state. */
     val wakeWordState: StateFlow<WakeWordState> = wakeWordController.state
 
+    /** Observable always-on assistant service state. */
+    val persistentState: StateFlow<PersistentAssistantState> = PersistentAssistant.state
+
     /** Observable attachment upload queue. */
     val uploadItems: StateFlow<List<UploadItem>> = attachmentsController.uploads
 
@@ -167,6 +181,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             wakeWordController.state.collect { state ->
                 _uiState.update { it.copy(wakeWordState = state) }
+                if (_uiState.value.persistentEnabled) {
+                    PersistentAssistantController.setListening(
+                        getApplication(),
+                        state is WakeWordState.Listening &&
+                            !callState.value.state.isLive,
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -189,6 +210,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val live = state.state.isLive
                 if (live && !callWasLive) {
                     wakeWordController.stop()
+                    if (_uiState.value.persistentEnabled) {
+                        PersistentAssistantController.setListening(getApplication(), false)
+                    }
                 } else if (!live && callWasLive && _uiState.value.wakeWordEnabled) {
                     wakeWordController.start()
                 }
@@ -225,6 +249,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             wakeWordController.updateConfig(WakeWordConfig(sensitivity = settings.sensitivity))
             if (settings.enabled && !callState.value.state.isLive) {
                 wakeWordController.start()
+            }
+        }
+
+        viewModelScope.launch {
+            val enabled = withContext(Dispatchers.IO) { persistentSettings.isEnabled() }
+            val exempt = withContext(Dispatchers.IO) { batteryOptimisation.isIgnoring() }
+            _uiState.update {
+                it.copy(persistentEnabled = enabled, batteryExempt = exempt)
+            }
+            if (enabled) {
+                if (!PersistentAssistant.state.value.running) {
+                    PersistentAssistantController.startFromForeground(getApplication())
+                }
+                syncPersistentListening()
             }
         }
     }
@@ -584,7 +622,58 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }.getOrNull()
     }
 
+    /** Persist the always-on assistant opt-in and start or stop the service. */
+    fun setPersistentAssistantEnabled(enabled: Boolean) {
+        persistentSettings.setEnabled(enabled)
+        _uiState.update { it.copy(persistentEnabled = enabled) }
+        val application = getApplication<Application>()
+        if (enabled) {
+            PersistentAssistantController.startFromForeground(application)
+            syncPersistentListening()
+        } else {
+            PersistentAssistantController.stop(application)
+        }
+        refreshPersistentAssistantState()
+    }
+
+    private fun syncPersistentListening() {
+        if (!_uiState.value.persistentEnabled) {
+            return
+        }
+        PersistentAssistantController.setListening(
+            getApplication(),
+            wakeWordController.state.value is WakeWordState.Listening &&
+                !callState.value.state.isLive,
+        )
+    }
+
+    /** Re-read the persisted assistant flag after the app returns to the foreground. */
+    fun refreshPersistentAssistantState() {
+        val enabled = persistentSettings.isEnabled()
+        if (_uiState.value.persistentEnabled != enabled) {
+            _uiState.update { it.copy(persistentEnabled = enabled) }
+        }
+    }
+
+    /** Re-read whether the app is exempt from battery optimisation. */
+    fun refreshBatteryExemption() {
+        val exempt = batteryOptimisation.isIgnoring()
+        if (_uiState.value.batteryExempt != exempt) {
+            _uiState.update { it.copy(batteryExempt = exempt) }
+        }
+    }
+
+    /** Retry the microphone foreground type now that the app is visible. */
+    fun promotePersistentAssistantMicrophone() {
+        if (persistentSettings.isEnabled()) {
+            PersistentAssistantController.promoteToMicrophone(getApplication())
+        }
+    }
+
     override fun onCleared() {
+        if (_uiState.value.persistentEnabled || PersistentAssistant.state.value.running) {
+            PersistentAssistantController.setListening(getApplication(), false)
+        }
         wakeWordController.release()
         session.release()
         super.onCleared()

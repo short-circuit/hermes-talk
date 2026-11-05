@@ -47,6 +47,8 @@ import com.example.hermestalk.AppUiState
 import com.example.hermestalk.AssistantRoleState
 import com.example.hermestalk.FingerprintState
 import com.example.hermestalk.R
+import com.example.hermestalk.call.AssistantForegroundType
+import com.example.hermestalk.call.PersistentAssistantState
 import com.example.hermestalk.rtvi.ConnectionState
 import com.example.hermestalk.rtvi.FailureReason
 import com.example.hermestalk.rtvi.Field
@@ -71,6 +73,11 @@ fun SettingsScreen(
     assistantRole: AssistantRoleState,
     assistantRoleRequestRefused: Boolean,
     onRequestAssistantRole: () -> Unit,
+    persistentEnabled: Boolean = false,
+    batteryExempt: Boolean = true,
+    persistentState: PersistentAssistantState = PersistentAssistantState(),
+    onPersistentEnabledChange: (Boolean) -> Unit = {},
+    onRequestBatteryExemption: () -> Unit = {},
 ) {
     var relayUrl by rememberSaveable(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
     var token by rememberSaveable(uiState.deviceToken) { mutableStateOf(uiState.deviceToken) }
@@ -86,6 +93,15 @@ fun SettingsScreen(
     val insecureLoopback = endpoint?.isCleartext == true && endpoint.isLoopback
     val fingerprintState = uiState.fingerprintState
     val failed = uiState.connectionState as? ConnectionState.Failed
+    val persistentStatus = when {
+        !persistentState.running -> R.string.settings_persistent_status_not_running
+        persistentState.listening -> R.string.settings_persistent_status_listening
+        persistentState.foregroundType == AssistantForegroundType.Microphone ->
+            R.string.settings_persistent_status_microphone
+        persistentState.foregroundType == AssistantForegroundType.SpecialUse ->
+            R.string.settings_persistent_status_special_use
+        else -> R.string.settings_persistent_status_running
+    }
     val formatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
 
     Scaffold(
@@ -430,6 +446,81 @@ fun SettingsScreen(
                         }
 
                         AssistantRoleState.Unavailable -> Unit
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_persistent"),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_persistent_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.settings_persistent_toggle),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_persistent_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = persistentEnabled,
+                            onCheckedChange = onPersistentEnabledChange,
+                            modifier = Modifier.testTag("settings_persistent_toggle"),
+                        )
+                    }
+                    Text(
+                        text = stringResource(persistentStatus),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("settings_persistent_status"),
+                    )
+                    if (persistentState.micRefusal != null) {
+                        Column(
+                            modifier = Modifier.testTag("settings_persistent_mic_refused"),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_persistent_mic_refused),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Text(
+                                text = persistentState.micRefusal.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (!batteryExempt) {
+                        Button(
+                            onClick = onRequestBatteryExemption,
+                            modifier = Modifier.testTag("settings_persistent_battery"),
+                        ) {
+                            Text(stringResource(R.string.settings_persistent_battery))
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_persistent_battery_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

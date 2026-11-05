@@ -52,6 +52,18 @@
     <string name="assistant_role_request">Set as default assistant</string>
     <string name="assistant_role_request_refused_hint">The system closed the request dialog. Set Hermes Talk as the digital assistant app in Settings → Apps → Default apps → Digital assistant app.</string>
 
+    <string name="settings_persistent_title">Background assistant</string>
+    <string name="settings_persistent_toggle">Keep assistant running</string>
+    <string name="settings_persistent_hint">Keeps the assistant alive when the screen is off, the task is swiped away, or the device reboots.</string>
+    <string name="settings_persistent_status_not_running">Not running</string>
+    <string name="settings_persistent_status_running">Running</string>
+    <string name="settings_persistent_status_microphone">Running (microphone)</string>
+    <string name="settings_persistent_status_special_use">Running (special use)</string>
+    <string name="settings_persistent_status_listening">Listening</string>
+    <string name="settings_persistent_mic_refused">Microphone foreground type refused at boot; running as special use.</string>
+    <string name="settings_persistent_battery">Allow background activity</string>
+    <string name="settings_persistent_battery_hint">Battery optimisation must be off. Verify with: adb shell dumpsys deviceidle whitelist +com.example.hermestalk</string>
+
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_connected">Connected</string>

@@ -364,3 +364,114 @@ Keep fixtures under 2 MB.
 | Perceived response | < 1.2 s p50 |
 
 Failures are reported with the measured distribution, not a single sample.
+
+## Persistent assistant service: screen-off, doze, task swipe and reboot
+
+The always-on assistant is a `START_STICKY`, `stopWithTask=false` foreground
+service in `:app:call`. It is opt-in (plain SharedPreferences, default off) and
+restarts from `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED`. On Android 14+ the service
+tries the microphone foreground type first and falls back to `specialUse` when a
+background start is refused, recording the exception in
+`PersistentAssistant.state.micRefusal` and promoting back to `microphone` on the
+app's `ON_RESUME`.
+
+### Test inventory
+
+- JVM policy (`android/app/call/src/test/java/com/example/hermestalk/call/PersistentAssistantPolicyTest.kt`):
+  attempt order with and without `RECORD_AUDIO` for SDK 26/29/33/34/35,
+  deterministic microphone→specialUse fallback when the microphone attempt is
+  refused, all-types-fail handling, wake-lock scoping, notification text
+  selection, `START_STICKY`, refusal classification for the three exception
+  types, and the default-off settings store round-trip.
+- Instrumentation (`android/app/src/androidTest/java/com/example/hermestalk/persistent/PersistentAssistantServiceTest.kt`):
+  `backgroundStartUsesThePlatformAllowedForegroundType`,
+  `foregroundStartUsesMicrophoneTypeAndScopesTheWakeLock`,
+  `screenOffAndDozeKeepTheServiceAlive` (default soak 600 s, overridable) and
+  `persistentServiceIsDeclaredStopWithTaskFalse`.
+  Instrumentation grants the target process background-activity-start
+  privileges, so the emulator may accept `microphone` after Home; the real
+  background refusal is exercised by the JVM fallback test instead.
+
+### Commands
+
+```sh
+cd android
+./gradlew :app:call:testDebugUnitTest :app:testDebugUnitTest --console=plain
+./gradlew :app:assembleDebug --console=plain
+```
+
+```sh
+adb shell am instrument -w \
+  -e class com.example.hermestalk.persistent.PersistentAssistantServiceTest \
+  -e persistentSoakSeconds 600 \
+  com.example.hermestalk.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+```sh
+adb shell dumpsys deviceidle whitelist +com.example.hermestalk
+adb shell dumpsys deviceidle whitelist | grep hermestalk
+adb shell dumpsys deviceidle whitelist -com.example.hermestalk
+```
+
+### Results
+
+Run on 2026-11-05 against the archive AVD `hermes_talk_34` (API 34, x86_64,
+`emulator-5554`), from the working tree at `feat/rtvi-call-loop`.
+
+JVM gates: `./gradlew :app:call:testDebugUnitTest :app:testDebugUnitTest` →
+`BUILD SUCCESSFUL`, 519 tests across the modules with 0 failures and 0 errors
+(`PersistentAssistantPolicyTest` 11/11). `./gradlew :app:assembleDebug` →
+`BUILD SUCCESSFUL`.
+
+Instrumentation: `./gradlew :app:connectedDebugAndroidTest` with
+`notAnnotation=androidx.test.filters.LargeTest`, `screenOffSeconds=15` and
+`persistentSoakSeconds=600` → 29 tests, 0 failures, 0 errors, 0 skipped,
+`BUILD SUCCESSFUL in 10m 48s`. The merged manifest was re-read from
+`app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml`.
+
+| Test | Scenario | Outcome | Measured |
+|---|---|---|---|
+| `PersistentAssistantPolicyTest` | JVM policy: attempt order, deterministic fallback, wake lock, notification, sticky restart, refusals, settings store | passed | 11/11, 0 failures |
+| `backgroundStartUsesThePlatformAllowedForegroundType` | Home press; asserts the platform-allowed microphone or specialUse type and the dumpsys foreground state | passed | 4.142 s; instrumentation kept `PROC_STATE_TOP`-like privileges, so it asserted the microphone type it was actually granted |
+| `foregroundStartUsesMicrophoneTypeAndScopesTheWakeLock` | Visible start, microphone type, wake lock acquired/released with listening | passed | 1.084 s; wake lock acquired on `listening=true`, released on `listening=false` |
+| `screenOffAndDozeKeepTheServiceAlive` | Screen off plus forced Doze for the soak duration, same pid and microphone type | passed | 601.098 s soak, same pid, `types=00000080` (microphone) in dumpsys |
+| `persistentServiceIsDeclaredStopWithTaskFalse` | Merged manifest `stopWithTask=false` and declared foreground types | passed | `FLAG_STOP_WITH_TASK == 0`, microphone and specialUse declared |
+
+### Manual acceptance: screen-off, task swipe, reboot
+
+The soak test above covers the 600 s window, and the same scenario was repeated
+by hand from the app UI (toggle on, then `input keyevent 26` and
+`dumpsys deviceidle force-idle`) so the numbers below are independent of the
+instrumentation process.
+
+| Check | Command | Result |
+|---|---|---|
+| Service foreground with the microphone type | `dumpsys activity services com.example.hermestalk` | `isForeground=true foregroundId=4201 types=00000080` (microphone), `startCommandResult=1` (START_STICKY), `createdFromFg=true` |
+| Screen off + forced Doze for 10 min | `input keyevent 26`; `dumpsys deviceidle force-idle` | `mState=IDLE`, same pid `21475` before and after 05:06:47Z → 05:16:47Z, service still foreground with microphone type |
+| Wake lock scoping | `dumpsys power` while `listening=false` | `Wake Locks: size=0`; the instrumentation test asserts it is held only while listening |
+| Task swipe | recents card swiped away | `topResumedActivity=NexusLauncherActivity`, zero `hermestalk` tasks left, service still foreground/microphone, pid unchanged |
+| Reboot without a user launch | `adb reboot`; wait for `sys.boot_completed=1` | service restarted by `BOOT_COMPLETED` (`createdFromFg=false`, `allowStartForeground=BOOT_COMPLETED`, `uidState: RCVR`), `types=40000000` (specialUse), no activity resumed (`topResumedActivity=NexusLauncherActivity`) |
+| Android 14 while-in-use refusal at boot (actual result) | logcat after the reboot | `W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.example.hermestalk/.call.PersistentAssistantService` and `W PersistentAssistant: Microphone foreground type refused (java.lang.SecurityException: Starting FGS with type microphone … targetSDK=34 … and the app must be in the eligible state/exemptions to access the foreground only permission); falling back`. The platform raised `SecurityException`, not the `ForegroundServiceStartNotAllowedException` the Android 15 notes name; the service catches both and the boot start is recorded as `mAllowWhileInUsePermissionInFgsReason=DENIED` |
+| Sticky restart | `run-as com.example.hermestalk kill -9 3548` | new pid `4145`, service foreground again within 3 s, `types=40000000` (specialUse, background restart), `startCommandResult=1` |
+| Promotion once visible | launch `MainActivity` | `types=00000080` (microphone), `mAllowWhileInUsePermissionInFgsReason=PROC_STATE_TOP`, Settings shows `Running (microphone)` |
+| Battery exemption UI | Settings card | the exemption button and hint disappear once `isIgnoringBatteryOptimizations` is true; the card otherwise offers **Allow background activity** |
+| Doze whitelist command | `dumpsys deviceidle whitelist +com.example.hermestalk` | `Added: com.example.hermestalk`, listed as `user,com.example.hermestalk,10250` |
+
+### Battery cost
+
+Measured with `dumpsys battery unplug` and `dumpsys batterystats --reset`, then
+10 minutes of screen-off forced deep idle with the service running and
+`listening=false` (`2026-11-05T05:17:34Z` → `05:27:34Z`, 10m 04s of
+batterystats time, 99.1% of it screen off):
+
+- App-attributed power: uid `u0a250` does not appear in the estimated-power
+  table at all, i.e. below the print threshold — 0.00 mAh for the window.
+- Device deep-idle baseline (all global components): `screen 0.000225 +
+  cpu 0.00358 + mobile_radio 0.000667 + sensors 0.0157 + wifi 0.0000218 +
+  wakelock 0.0166 + idle 0.0168 + GPU 0.000667 = 0.0543 mAh`, i.e. about
+  **0.32 mAh/h ≈ 0.011 %/h** against the AVD's learned 3000 mAh capacity.
+- The emulator's simulated battery level is pinned at 100 while plugged in and
+  does not step down when unplugged, so the level delta is unusable; the figure
+  above is derived from `batterystats` estimated power, not from a level change.
+- `dumpsys power` reported `Wake Locks: size=0` for the whole window, so the
+  service adds no wake-lock cost when it is not listening.

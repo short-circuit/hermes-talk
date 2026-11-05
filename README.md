@@ -6,9 +6,11 @@ and send files in either direction — with no cloud speech, LLM, or TTS depende
 
 **Status:** v0.1.1, pre-alpha. Shipped: the relay's probe and file-transfer surface, the RTVI call loop
 (WebRTC signalling and audio bridge, VAD/STT, voice brain, Hermes delegation, TTS, barge-in, spoken
-approval and `MAX_CALL_MINUTES`), the Android client and its instrumentation suite. The Android
-Connected/Ready path is still proven against `android/stub-relay`; an in-process `aiortc` client
-exercises the production relay loop in the test suite. See `docs/RELEASE.md` for what v0.1.1 contains
+approval and `MAX_CALL_MINUTES`), the Android client and its instrumentation suite. The Android client
+also keeps an always-on assistant foreground service alive across screen-off, task swipe and reboot when
+the user opts in. The Android Connected/Ready path is still proven against
+`android/stub-relay`; an in-process `aiortc` client exercises the production relay loop in the test suite.
+See `docs/RELEASE.md` for what v0.1.1 contains
 and `docs/ROADMAP.md` for the phases.
 
 ## Why

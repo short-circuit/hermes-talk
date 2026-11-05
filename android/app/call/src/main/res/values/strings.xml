@@ -45,4 +45,11 @@
     <string name="call_notification_channel_description">Microphone call in progress</string>
     <string name="call_notification_title">Hermes Talk call</string>
     <string name="call_notification_text">Duration %1$s · %2$s</string>
+
+    <string name="persistent_assistant_channel_name">Background assistant</string>
+    <string name="persistent_assistant_channel_description">Always-on on-device wake-word listening for the local assistant</string>
+    <string name="persistent_notification_title">Hermes Talk assistant</string>
+    <string name="persistent_notification_text_listening">Listening for the wake word</string>
+    <string name="persistent_notification_text_idle">Assistant running</string>
+    <string name="persistent_notification_stop">Stop</string>
 </resources>
