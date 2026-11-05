@@ -20,11 +20,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 BOARD = "hermes-talk"
 WORKDIR = "/store/archive/hermes-talk"
+BOARD_DB = Path.home() / ".hermes" / "kanban" / "boards" / BOARD / "kanban.db"
+
+# Cards created outside this script that the P7 chain depends on. The call-loop
+# card is the hard gate for the E2E card. It was parked in triage and parented
+# to epic containers that never close, so it could never promote; the wiring
+# step below replaces those parents with the relay-container card and moves it
+# to todo, keeping the serial chain (one ready card at a time) intact.
+EXISTING_IDS = {"call-loop": "t_65abf6b2"}
 
 CONSTRAINTS = (
     "**Constraints:** local-only at runtime (no cloud STT/TTS/LLM); this repo is public — "
@@ -89,6 +99,16 @@ EPICS = [
         (
             "Security gates, docs, deploy draft, code review, and the v0.1 checklist.\n\nExit: tagged release "
             "with green CI and a clean public repo."
+        ),
+    ),
+    (
+        "E7",
+        "EPIC P7 — Assistant role, always-on operation and container E2E",
+        (
+            "Make Hermes Talk the system assistant, keep it alive with the screen off, and prove the whole "
+            "path against the deployed relay container.\n\n"
+            "Exit: power-button launch, screen-off hotword soak, and an emulator→container E2E run all pass "
+            "on the archive-hosted AVD."
         ),
     ),
 ]
@@ -595,6 +615,200 @@ TASKS = [
             "**Acceptance:** a clean clone builds and runs; CI green on the tag; hygiene script clean."
         ),
     ),
+    # ---------------- P7 (strict serial chain: one ready card at a time) ----------------
+    (
+        "p7-avd",
+        "P7",
+        "Provision the archive-hosted API 34 emulator",
+        "devops",
+        [],
+        (
+            "**Objective:** move emulator storage off the 94%-full home disk and make the AVD reproducible "
+            "on `/store/archive`.\n\n"
+            "**Verified current state (HEAD `9c5f137`):** AVD `hermes_talk_34` lives in `~/.android/avd/` "
+            "(API 34, x86_64, 6 GiB data partition). `df -h`: `/home` 94% used (124 GB free), "
+            "`/store/archive` 1.3 TB free. The Android SDK is at `~/Android/Sdk` (emulator, platform-tools, "
+            "system-images).\n\n"
+            "**Do:** export `ANDROID_AVD_HOME=/store/archive/android-avd` for both `avdmanager` and "
+            "`emulator`; recreate `hermes_talk_34` there from the installed API 34 x86_64 system image; keep "
+            "the system image in the SDK and document the split; add `scripts/emulator-archive.sh` with "
+            "start / wait-for-boot / stop / headless subcommands that always export the same AVD home; verify "
+            "KVM is usable.\n\n"
+            "**Acceptance:** `adb devices` shows the emulator as `device`; `adb shell getprop "
+            "ro.build.version.sdk` = 34; `du -sh /store/archive/android-avd` non-zero; no `hermes_talk_34` "
+            "remains in `~/.android/avd`; running the script twice does not create a second AVD; cold-boot "
+            "duration recorded in `docs/TESTING.md`."
+        ),
+    ),
+    (
+        "p7-baseline",
+        "P7",
+        "Baseline the current app on the archive emulator",
+        "qa-engineer",
+        ["p7-avd"],
+        (
+            "**Objective:** record what the app actually does today, before any P7 feature lands.\n\n"
+            "**Do:** `./gradlew :app:assembleDebug`, install, grant runtime permissions, run "
+            "`scripts/android-instrumentation.sh` (stub relay + `adb reverse tcp:8790`) on the archive AVD; "
+            "capture the full adb/gradle output and logcat.\n\n"
+            "**Acceptance:** every instrumentation test's outcome recorded from real output (pass/fail/"
+            "skip); each skip names its reason (e.g. the real relay has no RTVI surface yet); the stub-relay "
+            "call flow completes; evidence path recorded in `docs/TESTING.md`; no test counted as passed "
+            "because it was skipped."
+        ),
+    ),
+    (
+        "p7-relay-container",
+        "P7",
+        "Deploy the relay container and make it reachable from the emulator",
+        "devops",
+        ["p7-baseline"],
+        (
+            "**Objective:** run the server side as the committed container stack instead of a bare Python "
+            "process, and prove the emulator can reach it.\n\n"
+            "**Verified current state:** `deploy/compose.yaml` (relay + Caddy proxy, `network_mode: host`, "
+            "relay on `127.0.0.1:8790`, healthcheck `/health`+`/ready`, model mount, non-root uid 10001) "
+            "exists but is not used by any test path.\n\n"
+            "**Do:** `docker compose up -d --build` with `.env` and a model directory; verify health; "
+            "establish the emulator path (`adb reverse tcp:8790 tcp:8790` because the relay binds host "
+            "loopback only; document whether `10.0.2.2` works and why); handle TLS trust for the Caddy proxy "
+            "or use the loopback reverse path for tests.\n\n"
+            "**Acceptance:** container healthcheck green; the app's own `HttpHealthProbe`/`RelayEndpoint` "
+            "reports ready from inside the emulator; `scripts/relay-container-up.sh` / `down` reproduce it; "
+            "teardown leaves no orphan container; no unrelated service restarted."
+        ),
+    ),
+    (
+        "p7-e2e",
+        "P7",
+        "E2E: emulator app against the containerised relay",
+        "qa-engineer",
+        ["call-loop"],
+        (
+            "**Objective:** drive the real app against the real relay container — real network path, real "
+            "models, no stub relay.\n\n"
+            "**Gate:** the relay cannot serve RTVI until the call-loop card lands (it is not mounted in "
+            "`relay/app.py`). That card is chained directly in front of this one.\n\n"
+            "**Do:** instrumentation flow through `MainActivity`: connect → scripted utterance → endpointing "
+            "→ STT → brain → TTS audio, asserting on the app's own event stream. The emulator mic cannot be "
+            "scripted reliably, so feed fixture PCM through the app's audio-source abstraction and say so in "
+            "the test docs — the transport and relay stay real.\n\n"
+            "**Acceptance:** test asserts transcript text and TTS audio bytes/latency measured from the app's "
+            "events; fails (not skips) when the container is absent; one command "
+            "`scripts/e2e-emulator-container.sh` reproduces it; latency table recorded in "
+            "`docs/TESTING.md`; zero mocks between app and relay."
+        ),
+    ),
+    (
+        "p7-assistant-role",
+        "P7",
+        "Default assistant: ACTION_ASSIST entry point and ROLE_ASSISTANT request",
+        "frontend-dev",
+        ["p7-e2e"],
+        (
+            "**Objective:** holding the power button (long-press) launches Hermes Talk instead of Gemini.\n\n"
+            "**Verified current state:** `AndroidManifest.xml` declares only MAIN/LAUNCHER and "
+            "SEND/SEND_MULTIPLE; there is no `ACTION_ASSIST` filter and no `RoleManager` code anywhere in "
+            "`android/`.\n\n"
+            "**Do:** add an exported `ACTION_ASSIST` entry point (`android.intent.action.ASSIST` + "
+            "`category.DEFAULT`) with `singleTop`; request `RoleManager.ROLE_ASSISTANT` through "
+            "`createRequestRoleIntent` and show the role-holder state in Settings; handle held/revoked role "
+            "without crashing; keep the existing RECORD_AUDIO and FGS permissions.\n\n"
+            "**Acceptance:** `adb shell cmd role add-role-holder android.app.role.ASSISTANT "
+            "com.example.hermestalk` then `adb shell input keyevent 219` resumes the call screen; `adb shell "
+            "cmd role get-role-holders android.app.role.ASSISTANT` lists the package; an instrumentation "
+            "test asserts the activity is resumed; revoking the role does not crash; documented in README."
+        ),
+    ),
+    (
+        "p7-background",
+        "P7",
+        "Persistent foreground service: screen-off, task swipe and reboot",
+        "frontend-dev",
+        ["p7-assistant-role"],
+        (
+            "**Objective:** the assistant process survives screen-off, task swipe and reboot.\n\n"
+            "**Verified current state:** `android/app/call/.../CallForegroundService.kt` is call-scoped — "
+            "manifest `stopWithTask=true`, `START_NOT_STICKY`, 10-minute wake lock; `BatteryOptimisation.kt` "
+            "and `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` already exist; there is no `BOOT_COMPLETED` receiver "
+            "anywhere.\n\n"
+            "**Do:** persistent service (new or split from `CallForegroundService`) with "
+            "`stopWithTask=false`, `START_STICKY`, immediate FGS notification, wake lock scoped to listening "
+            "only, `RECEIVE_BOOT_COMPLETED` receiver restarting it, battery-exemption request flow, and a "
+            "documented doze whitelist command.\n\n"
+            "**Acceptance:** on the archive AVD — screen off (`input keyevent 26`) plus `dumpsys deviceidle "
+            "force-idle`, process still alive after at least 10 minutes and the FGS with microphone type "
+            "visible in `dumpsys activity services`; merged manifest shows `stopWithTask=false`; `adb "
+            "reboot` restores the service without a user launch; battery drain (%/h) recorded. Android 14's "
+            "while-in-use mic FGS rule must be verified empirically at boot, not assumed — record the actual "
+            "result and implement the documented fallback if mic FGS is refused."
+        ),
+    ),
+    (
+        "p7-hotword",
+        "P7",
+        "Always-on wake-word listening while backgrounded and screen off",
+        "frontend-dev",
+        ["p7-background"],
+        (
+            "**Objective:** the mic stays hot in the persistent service and the wake word summons the "
+            "assistant hands-free with the screen off.\n\n"
+            "**Verified current state:** `android/wakeword` (sherpa-onnx KWS: `WakeWordEngine`, "
+            "`WakeWordController`, `WakeWordListener`, `FalseTriggerLog`) exists as a library and is mounted "
+            "in no service.\n\n"
+            "**Do:** run the KWS inside the persistent FGS, single mic owner (no double capture with "
+            "`CallForegroundService`), audio-focus/route restore after detection, false-trigger logging, wake "
+            "word → assistant entry point.\n\n"
+            "**Acceptance:** fixture utterances detected with zero misses over the fixture set and a recorded "
+            "false-trigger count; screen-off 30-minute soak keeps the service alive with detection working; "
+            "wake word → call screen under 1 s; battery cost recorded in `docs/TESTING.md`."
+        ),
+    ),
+    (
+        "p7-ci",
+        "P7",
+        "CI gate: assistant role, screen-off survival and container E2E",
+        "devops",
+        ["p7-hotword"],
+        (
+            "**Objective:** the new behaviour is actually exercised in CI, not only locally.\n\n"
+            "**Do:** extend `.github/workflows/ci.yml` emulator job with role-add plus `keyevent 219`, "
+            "screen-off service assertions (the existing `screenOffSeconds` argument), and a container-E2E "
+            "job.\n\n"
+            "**Acceptance:** workflow green with the new tests executed; anything host-model-only is "
+            "explicitly `@LargeTest`-gated and labelled; no skip counted as a pass; CI run id recorded."
+        ),
+    ),
+    (
+        "p7-docs",
+        "P7",
+        "Document emulator, E2E, assistant and battery-exemption setup",
+        "technical-writer",
+        ["p7-ci"],
+        (
+            "**Objective:** handoff docs someone can follow without reading code.\n\n"
+            "**Deliverables:** `docs/TESTING.md` (archive AVD procedure, container E2E command, baseline "
+            "table), `docs/RUNBOOK.md` (assistant role, battery exemption, boot start, `dumpsys` "
+            "troubleshooting), README quickstart, architecture note for the service lifecycle.\n\n"
+            "**Acceptance:** every command copy-pasted and verified on the archive AVD; "
+            "`ANDROID_AVD_HOME` documented instead of hard-coded home paths (public repo); no secret or PII "
+            "in the docs."
+        ),
+    ),
+    (
+        "p7-review",
+        "P7",
+        "Code review gate for P7",
+        "code-reviewer",
+        ["p7-docs"],
+        (
+            "**Objective:** independent review before the P7 epic closes.\n\n"
+            "**Scope:** role/intent correctness, service lifecycle and wake-lock/mic leaks, doze behaviour, "
+            "test honesty (no skip-as-pass), no PII or secrets.\n\n"
+            "**Acceptance:** findings recorded on the card; each fixed or filed as a new card; all gates "
+            "green."
+        ),
+    ),
 ]
 
 
@@ -639,12 +853,88 @@ def create(
     return json.loads(out.strip())["id"]
 
 
+def move_triage_to_todo(task_id: str) -> bool:
+    """Move a parked card triage -> todo.
+
+    ``promote`` refuses triage cards, so the status change is done directly.
+    The UPDATE is status-guarded so a re-run never demotes a card that already
+    left triage, and the ``task_events`` row keeps the audit trail honest.
+    """
+    con = sqlite3.connect(BOARD_DB)
+    try:
+        cur = con.execute(
+            "UPDATE tasks SET status='todo' WHERE id=? AND status='triage'",
+            (task_id,),
+        )
+        moved = cur.rowcount > 0
+        if moved:
+            con.execute(
+                "INSERT INTO task_events(task_id, kind, payload, created_at) "
+                "VALUES(?, 'promoted', ?, unixepoch())",
+                (
+                    task_id,
+                    json.dumps(
+                        {
+                            "from": "triage",
+                            "to": "todo",
+                            "reason": "P7 serial chain: E2E dependency, gated behind relay-container",
+                        }
+                    ),
+                ),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return moved
+
+
+def wire_call_loop(ids: dict[str, str]) -> None:
+    """Gate the call-loop card behind relay-container and make it dispatchable."""
+    call_loop = EXISTING_IDS["call-loop"]
+    # Fail loudly if the card is gone rather than silently creating a dangling edge.
+    run(["hermes", "kanban", "--board", BOARD, "show", call_loop])
+
+    con = sqlite3.connect(f"file:{BOARD_DB}?mode=ro", uri=True)
+    try:
+        parents = [
+            row[0]
+            for row in con.execute(
+                "SELECT parent_id FROM task_links WHERE child_id=?", (call_loop,)
+            )
+        ]
+    finally:
+        con.close()
+
+    for parent in parents:
+        if parent != ids["p7-relay-container"]:
+            run(["hermes", "kanban", "--board", BOARD, "unlink", parent, call_loop])
+
+    run(
+        [
+            "hermes",
+            "kanban",
+            "--board",
+            BOARD,
+            "link",
+            ids["p7-relay-container"],
+            call_loop,
+        ]
+    )
+
+    if move_triage_to_todo(call_loop):
+        print(f"call-loop   {call_loop}  triage -> todo (serial chain)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    ids: dict[str, str] = {}
+    # Existing ids are pre-seeded so P7 cards can declare the call-loop card as
+    # a parent before the wiring pass runs.
+    ids: dict[str, str] = (
+        {key: key for key in EXISTING_IDS} if args.dry_run else dict(EXISTING_IDS)
+    )
 
     for key, title, body in EPICS:
         if args.dry_run:
@@ -689,6 +979,8 @@ def main() -> None:
     if args.dry_run:
         print(f"\n{len(EPICS)} epics, {len(TASKS)} tasks")
         return
+
+    wire_call_loop(ids)
 
     print(f"\nseeded {len(EPICS)} epics, {len(TASKS)} tasks on board '{BOARD}'")
     print(run(["hermes", "kanban", "--board", BOARD, "stats"]).strip())
