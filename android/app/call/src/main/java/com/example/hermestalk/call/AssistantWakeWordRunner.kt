@@ -183,12 +183,16 @@ class AssistantWakeWordRunner(
         released = true
         resumeJob?.cancel()
         resumeJob = null
-        reportListening(false)
         try {
-            controller.release()
+            synchronized(captureLock) {
+                captureActive = false
+                startInFlight = false
+                controller.release()
+            }
         } catch (error: Exception) {
             Log.w(TAG, "Could not release the wake-word controller", error)
         }
+        reportListening(false)
         scope.cancel()
         if (AssistantWakeWord.runner === this) {
             AssistantWakeWord.runner = null
@@ -229,7 +233,9 @@ class AssistantWakeWordRunner(
                 startInFlight = false
             }
 
-            if (started && (suspended || !AssistantWakeWordPolicy.shouldCapture(inputs()))) {
+            if (started &&
+                (released || suspended || !AssistantWakeWordPolicy.shouldCapture(inputs()))
+            ) {
                 try {
                     synchronized(captureLock) {
                         controller.stop()

@@ -322,8 +322,10 @@ from `BOOT_COMPLETED` (`ForegroundServiceStartNotAllowedException` per the relea
 image raised `SecurityException`), so a boot-started service holds `specialUse` and wake-word capture
 stays paused until the app is visible and promotes it to `microphone`. A foreground service is also not
 a background-activity-launch exemption, so `AssistantLaunch` may fail to open the call screen from the
-background; it records `AssistantLaunchResult.started=false` with the failure text, and the foreground
-notification's content intent is the one-tap fallback.
+background. The platform usually blocks such a launch silently (no exception; the block appears only in
+logcat), so `AssistantLaunchResult.started` means only that `startActivity` was accepted without
+throwing — it is not evidence that the screen opened. The foreground notification's content intent is
+the one-tap fallback.
 
 Observability is in-process only: `PersistentAssistant.state` exposes `running`, `foregroundType`,
 `listening`, `wakeLockHeld`, `micRefusal` and `startedAtMillis`; the Settings screen renders

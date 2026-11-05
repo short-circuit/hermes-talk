@@ -71,7 +71,7 @@
     <string name="settings_wake_word_status_call">Wake word: off (mic owner is the call)</string>
     <string name="settings_wake_word_status_disabled">Wake word: not enabled</string>
     <string name="settings_wake_word_status_failed">Wake word failed: %1$s</string>
-    <string name="settings_wake_word_counts">Detections: %1$d · false triggers: %2$d · last launch: %3$d ms</string>
+    <string name="settings_wake_word_counts">Detections: %1$d · log entries: %2$d · last launch: %3$d ms</string>
 
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connecting">Connecting…</string>

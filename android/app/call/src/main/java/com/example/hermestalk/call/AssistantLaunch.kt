@@ -14,6 +14,7 @@ interface AssistantLauncher {
 
 /** Result of an attempted assistant launch. */
 data class AssistantLaunchResult(
+    /** True when `startActivity` returned without throwing — not proof the screen opened. */
     val started: Boolean,
     val blocked: Boolean = false,
     val latencyMillis: Long = 0L,

@@ -6,8 +6,9 @@ import android.content.Context
  * Persisted opt-in for the always-on assistant.
  *
  * This is intentionally a plain SharedPreferences store rather than the
- * encrypted token store: a BOOT_COMPLETED receiver runs before the user
- * unlocks the device and must be able to read the flag.
+ * encrypted token store: `LOCKED_BOOT_COMPLETED` is not handled, so the flag is
+ * only read after the user has unlocked the device and credential-protected
+ * storage is readable.
  */
 interface PersistentAssistantSettingsStore {
     /** True when the user asked the assistant to stay running. Default false. */

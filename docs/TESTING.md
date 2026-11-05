@@ -690,3 +690,28 @@ intentionally unmeasured.
 | screen off, wake word detected, no app visible | assistant opens within the 1000 ms budget, or the notification fallback is used | not run |
 | launch refused by BAL | `lastLaunchStarted=false`, notification content intent opens the assistant | not run |
 | call ends while wake word and assistant remain enabled | capture resumes and `AudioRecord` is reacquired | not run |
+
+### P7 review gate (2026-11-05)
+
+Independent re-run by the code-reviewer profile at `fd15416` plus the review fixes below, on
+`hermes_talk_34` (API 34, emulator-5554):
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit tests | `./gradlew test --rerun-tasks` | 562 tests, 0 failures, 0 errors, 0 skipped |
+| Instrumentation (`AssistantRoleHeldTest`, `PersistentAssistantServiceTest`, `AssistantWakeWordServiceTest`; `LargeTest` excluded) | `./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=…` | 10 tests, 0 failed, 0 skipped |
+| Gate honesty | `scripts/verify-instrumentation-results.sh` with all seven required cases | PASSED |
+| Hygiene | `scripts/check_repo_hygiene.sh` | clean (365 files) |
+
+`connectedDebugAndroidTest` uninstalls both APKs when it finishes, which drops the assistant role
+and the Doze whitelist entry; both were re-applied afterwards as the runbook requires.
+
+Review fixes in the same commit: the Settings counter labelled "false triggers" now reads
+"log entries" (the value is the accepted-detection log tail, see above, not a false-trigger count);
+`ARCHITECTURE.md` §3.5 no longer claims a refused background launch records
+`AssistantLaunchResult.started=false` (the block is usually silent, so `started` only means
+`startActivity` did not throw); the `PersistentAssistantSettingsStore` comment no longer claims
+`BOOT_COMPLETED` arrives before unlock; `AssistantWakeWordRunner.release()` now takes the capture
+lock so a teardown racing an in-flight `startCapture()` cannot leak the `AudioRecord`, the capture
+thread or the listening wake lock (`releaseDuringStartStopsTheCaptureAndReportsNotListening`).
+

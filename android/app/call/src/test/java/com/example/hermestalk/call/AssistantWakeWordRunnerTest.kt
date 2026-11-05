@@ -9,7 +9,9 @@ import com.example.hermestalk.wakeword.WakeWordKeywordEngine
 import com.example.hermestalk.wakeword.WakeWordPermissionChecker
 import com.example.hermestalk.wakeword.WakeWordUsage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -22,6 +24,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class AssistantWakeWordRunnerTest {
 
@@ -159,6 +164,80 @@ class AssistantWakeWordRunnerTest {
     }
 
     @Test
+    fun releaseDuringStartStopsTheCaptureAndReportsNotListening() {
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val runnerScope =
+            CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
+        val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val events = mutableListOf<String>()
+        val capture = FakeCapture(events, startEntered = entered, startProceed = proceed)
+        val clock = FakeClock()
+        var lastListening = false
+        lateinit var runner: AssistantWakeWordRunner
+        val controller = WakeWordController(
+            initialConfig = WakeWordConfig(),
+            engineFactory = { FakeEngine() },
+            captureFactory = { _, _ -> capture },
+            permissionChecker = WakeWordPermissionChecker { true },
+            falseTriggerLog = log,
+            usage = WakeWordUsage(clock = { clock.now }, cpuTicksReader = { 0L }),
+            onWakeWord = { runner.handleDetection() },
+            scope = controllerScope,
+        )
+        runner = AssistantWakeWordRunner(
+            controllerFactory = { controller },
+            launcher = FakeLauncher(clock, 0L, events),
+            audioRestore = FakeAudioRestore(events),
+            clock = { clock.read() },
+            onListeningChanged = { listening ->
+                lastListening = listening
+                events += "listening:$listening"
+            },
+            restartDelayMillis = 500L,
+            scope = runnerScope,
+            foregroundTypeProvider = { AssistantForegroundType.Microphone },
+            callLiveProvider = { runner.callLive },
+            hasRecordAudioProvider = { true },
+            enabledProvider = { true },
+            falseTriggerLog = log,
+        )
+        AssistantWakeWord.runner = runner
+
+        try {
+            runner.setEnabled(true)
+            assertTrue("the capture start must be entered", entered.await(5, TimeUnit.SECONDS))
+
+            val releaseThread = Thread({ runner.release() }, "runner-release")
+            releaseThread.start()
+            // release() sets released before touching the controller. In the fixed
+            // runner it then blocks on captureLock, which startCapture holds until
+            // start() returns. On the unfixed runner it returns immediately.
+            while (releaseThread.isAlive && releaseThread.state != Thread.State.BLOCKED) {
+                Thread.onSpinWait()
+            }
+
+            proceed.countDown()
+            releaseThread.join(5_000)
+            assertFalse("release() must return", releaseThread.isAlive)
+
+            executor.shutdown()
+            assertTrue(
+                "the start coroutine must finish",
+                executor.awaitTermination(5, TimeUnit.SECONDS),
+            )
+
+            assertFalse(runner.captureThreadAlive())
+            assertTrue(runner.audioRecordReleased())
+            assertFalse(lastListening)
+        } finally {
+            executor.shutdownNow()
+            controllerScope.cancel()
+        }
+    }
+
+    @Test
     fun releaseIsIdempotent() = runTest {
         val harness = Harness(this, log)
         AssistantWakeWord.runner = harness.runner
@@ -258,6 +337,8 @@ class AssistantWakeWordRunnerTest {
 
     private class FakeCapture(
         private val events: MutableList<String>,
+        private val startEntered: CountDownLatch? = null,
+        private val startProceed: CountDownLatch? = null,
     ) : WakeWordCapture {
         override var onKeyword: ((String) -> Unit)? = null
         override var onLevel: ((Float) -> Unit)? = null
@@ -282,6 +363,8 @@ class AssistantWakeWordRunnerTest {
             get() = releasedFlag
 
         override fun start(): WakeWordCaptureStart {
+            startEntered?.countDown()
+            startProceed?.await()
             startCount += 1
             runningFlag = true
             threadAliveFlag = true
