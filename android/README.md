@@ -616,8 +616,13 @@ cd android
   -Pandroid.testInstrumentationRunnerArguments.wakeWordBatteryMinutes=1
 ```
 
-`@LargeTest` marks the wake-word battery run, which defaults to 60 minutes; CI
-excludes that annotation and shortens the screen-off call window instead.
+`@LargeTest` marks the wake-word soak, which defaults to 1800 s, and the
+container E2E call. CI runs `scripts/android-instrumentation.sh`: it grants
+`android.app.role.ASSISTANT` through the shell (the role gate cannot use the
+user dialog headless), runs the default suite with `screenOffSeconds=15`, and
+then runs the `@LargeTest` soak explicitly with `wakeWordSoakSeconds=120`. A
+verifier reads the JUnit XML and fails on a skipped or absent case. The
+container E2E call runs in its own job via `scripts/e2e-emulator-container.sh`.
 
 ## Always-on assistant service: screen-off, task swipe and reboot
 

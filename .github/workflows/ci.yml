@@ -100,8 +100,13 @@ jobs:
   # Runs the self-contained instrumentation suite on a real emulator. The
   # upload-retry, token-expiry and call-state tests use an in-process loopback
   # fixture, so no host service is required beyond the stub relay used by the
-  # end-to-end flow. The wake-word battery test is excluded by annotation; the
-  # screen-off call window is shortened to keep the job inside its budget.
+  # end-to-end flow. The script grants the assistant role through the shell and
+  # then asserts the assist key (keyevent 219) opens the call screen, the
+  # screen-off windows stay alive (the shared `screenOffSeconds` argument), and
+  # the wake-word service cases pass. It then runs the one @LargeTest screen-off
+  # soak explicitly, with a shortened window. A verifier reads the JUnit XML and
+  # fails on a skipped or absent case, so a filter that matches nothing cannot
+  # leave the job green.
   # Like the `android` job it builds and tests debug only, so no release keystore
   # or signing secret is required; signed release APKs are built locally per
   # docs/RELEASE.md.
@@ -140,3 +145,65 @@ jobs:
           # and runs each in its own shell, so loops and continuations must
           # live in the script file, not here.
           script: bash scripts/android-instrumentation.sh
+      - name: Upload instrumentation results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: instrumentation-results
+          path: android/app/build/outputs/androidTest-results
+          if-no-files-found: warn
+
+  # The scripted-microphone E2E call against the real relay container. The
+  # weights are gitignored, so the job downloads the pinned public model set and
+  # verifies every file by SHA-256 (scripts/fetch-e2e-models.sh); inference stays
+  # on the runner, so no cloud STT/TTS/LLM is contacted. The call test is
+  # @LargeTest because it needs the host model mount and the container, which is
+  # why it runs in this dedicated job instead of the filtered emulator suite.
+  android-container-e2e:
+    name: android (emulator to container E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HERMES_TALK_MODELS: ${{ github.workspace }}/models
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Cache the pinned model set
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: hermes-talk-models-${{ hashFiles('scripts/fetch-e2e-models.sh') }}
+      - name: Fetch the pinned model set
+        run: bash scripts/fetch-e2e-models.sh
+      - name: Relay environment
+        run: |
+          cp .env.example deploy/.env
+          chmod 600 deploy/.env
+      - name: Container E2E call
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -camera-back none
+          script: bash scripts/e2e-emulator-container.sh
+      - name: Upload instrumentation results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: container-e2e-results
+          path: android/app/build/outputs/androidTest-results
+          if-no-files-found: warn

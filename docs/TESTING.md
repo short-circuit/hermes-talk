@@ -342,10 +342,56 @@ with status=ready; start it with scripts/relay-container-up.sh
 - The reply came from the deterministic policy route. `scripts/e2e-emulator-container.sh`
   warns when `VOICE_BRAIN_BASE_URL` is not answering; in that case a non-policy
   utterance would speak the failure line instead of a model answer.
-- The test is annotated `@LargeTest`, so the CI instrumentation job's
-  `notAnnotation` filter excludes it: it needs a booted emulator *and* the
-  container stack. CI keeps the stub-relay and in-process RTVI suites; this one
-  is run by hand with `scripts/e2e-emulator-container.sh`.
+- The test is annotated `@LargeTest`, so the default instrumentation suite
+  excludes it: it needs a booted emulator *and* the container stack. It runs in
+  the dedicated `android-container-e2e` CI job (see *CI gates*), which downloads
+  the pinned model set and starts the committed stack; locally the same path is
+  `scripts/e2e-emulator-container.sh`.
+
+## CI gates (GitHub Actions)
+
+`ci.yml` runs two emulator jobs that exercise this behaviour; both are gates, not
+smoke tests.
+
+`android-instrumentation` runs `scripts/android-instrumentation.sh`, which:
+
+1. starts the stub relay and `adb reverse` (the fixture the call tests expect —
+   a real relay on 8790 rejects the empty bearer token a headless run passes, so
+   the script refuses to guess and stops with a message if one answers);
+2. installs the APKs and grants `android.app.role.ASSISTANT` through the shell
+   (`cmd role add-role-holder`), then asserts the platform role-holder list names
+   the package. A headless emulator cannot grant the role through the user
+   dialog, so the shell grant is the only path;
+3. runs the default suite (`notAnnotation=LargeTest`) with
+   `screenOffSeconds=15` and `persistentSoakSeconds=15`, then verifies that
+   `AssistantRoleHeldTest` (role held; `input keyevent 219` — keycode
+   `KEYCODE_ASSIST` — resumes `MainActivity` on the call screen),
+   `CallForegroundServiceTest#callSurvivesScreenOffAndReleasesTheMicrophoneWhenEnded`,
+   `PersistentAssistantServiceTest#screenOffAndDozeKeepTheServiceAlive`,
+   `AssistantWakeWordServiceTest#wakeWordDetectionLaunchesTheAssistantWithinBudget`
+   and `#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers` all ran and passed;
+4. runs the one `@LargeTest` case the default suite excludes —
+   `AssistantWakeWordServiceTest#continuousListeningForTheConfiguredWindow` — with
+   `wakeWordSoakSeconds=120`, and verifies it the same way.
+
+`scripts/verify-instrumentation-results.sh` reads the JUnit XML and fails when a
+required case is absent, when any case failed or errored, or when anything was
+skipped. A skip is not a pass: a filter that matches nothing, an APK that failed
+to load, or an `@Ignore`d test would otherwise leave the job green.
+
+`android-container-e2e` runs `scripts/e2e-emulator-container.sh` against the
+committed stack. Model weights are gitignored, so `scripts/fetch-e2e-models.sh`
+downloads the pinned public set and verifies every file by SHA-256 (the digests
+are recorded in the script); the directory is cached between runs. Fetching is
+not inference: STT, the deterministic brain route and TTS still run in the
+container on the runner, so no cloud STT/TTS/LLM is contacted. The test is
+`@LargeTest` because it needs the host model mount and the container, and it
+fails rather than skips when the relay is unreachable.
+
+Both jobs upload their instrumentation results as artifacts, so a red run keeps
+the JUnit XML.
+
+Run record: see *CI run* below.
 
 ## Fixtures
 
@@ -423,10 +469,14 @@ JVM gates: `./gradlew :app:call:testDebugUnitTest :app:testDebugUnitTest` →
 (`PersistentAssistantPolicyTest` 11/11). `./gradlew :app:assembleDebug` →
 `BUILD SUCCESSFUL`.
 
-Instrumentation: `./gradlew :app:connectedDebugAndroidTest` with
+Instrumentation: `scripts/android-instrumentation.sh` (the CI gate) with
 `notAnnotation=androidx.test.filters.LargeTest`, `screenOffSeconds=15` and
-`persistentSoakSeconds=600` → 29 tests, 0 failures, 0 errors, 0 skipped,
-`BUILD SUCCESSFUL in 10m 48s`. The merged manifest was re-read from
+`persistentSoakSeconds=15` → 35 tests, 0 failures, 0 errors, 0 skipped,
+`BUILD SUCCESSFUL in 4m 05s`, including `AssistantRoleHeldTest` (role held;
+`input keyevent 219` opens the call screen) and the wake-word service cases. The
+script's verifier required all six named cases and found no skips; the separate
+`@LargeTest` soak run with `wakeWordSoakSeconds=120` then passed with 1 test, 0
+failures, 0 skipped. The merged manifest was re-read from
 `app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml`.
 
 | Test | Scenario | Outcome | Measured |
@@ -512,7 +562,8 @@ delay.
   `liveCallSuspendsWakeWordAndResumeRestoresCapture`,
   `disablingWakeWordStopsCaptureAndReleasesAudio` and
   `continuousListeningForTheConfiguredWindow` (`@LargeTest`, default soak
-  1800 s, overridable with `-e wakeWordSoakSeconds <seconds>`).
+  1800 s, overridable with `-e wakeWordSoakSeconds <seconds>`; the CI gate runs
+  it explicitly with 120 s after the default suite).
   The tests replace the capture with `FixtureWakeWordCapture`, which feeds the
   checked-in positive/negative WAV fixtures through the real keyword engine; the
   service, runner, policy and audio lifecycle stay real. The fixture-set test

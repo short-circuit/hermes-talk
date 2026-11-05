@@ -40,7 +40,9 @@ import org.junit.runner.RunWith
  * microphone type even after Home; a real background start falls back to
  * specialUse and records the refusal. The deterministic fallback itself is
  * covered by `PersistentAssistantPolicyTest`. The soak test defaults to 600
- * seconds and can be shortened through `-e persistentSoakSeconds <seconds>`.
+ * seconds and can be shortened through `-e persistentSoakSeconds <seconds>` or
+ * the shared `-e screenOffSeconds <seconds>` argument the CI gate passes; the
+ * service must survive both the screen-off and the forced-Doze window.
  */
 @RunWith(AndroidJUnit4::class)
 class PersistentAssistantServiceTest {
@@ -189,8 +191,9 @@ class PersistentAssistantServiceTest {
     fun screenOffAndDozeKeepTheServiceAlive() {
         grantNotificationPermissionIfNeeded()
         val device = UiDevice.getInstance(instrumentation)
-        val soakSeconds = InstrumentationRegistry.getArguments()
-            .getString("persistentSoakSeconds")
+        val arguments = InstrumentationRegistry.getArguments()
+        val soakSeconds = (arguments.getString("persistentSoakSeconds")
+            ?: arguments.getString("screenOffSeconds"))
             ?.toLongOrNull()
             ?.coerceAtLeast(5L)
             ?: DEFAULT_SOAK_SECONDS

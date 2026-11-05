@@ -113,7 +113,10 @@ cp ../.env.example .env && chmod 600 .env
 $EDITOR .env
 ```
 
-Place the models in `HERMES_TALK_MODELS` using the layout above.
+Place the models in `HERMES_TALK_MODELS` using the layout above. For CI,
+`scripts/fetch-e2e-models.sh` downloads the same set from its public upstream
+releases and verifies every file against a pinned SHA-256 before the container
+E2E job mounts it.
 
 ### 2. Validate the proxy configuration before starting anything
 

@@ -110,4 +110,10 @@ if [ "$status" -ne 0 ]; then
     printf 'e2e: FAILED (gradle exit %s)\n' "$status" >&2
     exit "$status"
 fi
+
+# A green Gradle exit is not proof the class ran; require the case in the JUnit
+# XML and reject any skip.
+bash "$ROOT/scripts/verify-instrumentation-results.sh" \
+    --dir "$ROOT/android/app/build/outputs/androidTest-results/connected" \
+    --require "com.example.hermestalk.e2e.ContainerCallE2ETest#callThroughTheAppReachesTranscriptAndSpokenAnswer"
 printf 'e2e: PASSED\n'
