@@ -377,6 +377,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Bring the assistant call screen up when the system assist gesture fires.
+     * Starts a call when the stored relay settings validate; otherwise leaves the
+     * call screen idle so the user can fix the settings. No-op when a call is live.
+     */
+    fun onAssistRequested(): Boolean {
+        if (callState.value.state.isLive) {
+            return false
+        }
+        val errors = RelaySettingsValidator.validate(relaySettings())
+        if (errors.isNotEmpty()) {
+            _uiState.update { it.copy(validationErrors = errors) }
+            return false
+        }
+        startCall()
+        return true
+    }
+
+    /**
      * Disconnect the connection-screen session first, then start the call with
      * the stored relay settings.
      */

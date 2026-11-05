@@ -9,12 +9,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hermestalk.attachments.ui.AttachmentPanel
@@ -34,10 +39,11 @@ private enum class AppScreen { Settings, Connection, Call }
 class MainActivity : ComponentActivity() {
 
     private val pendingShare = mutableStateOf<Intent?>(null)
+    private val pendingAssist = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleShareIntent(intent)
+        handleIncomingIntent(intent)
         setContent {
             val appViewModel: AppViewModel = viewModel()
             val uiState by appViewModel.uiState.collectAsStateWithLifecycle()
@@ -136,6 +142,51 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            var assistantRoleState by remember {
+                mutableStateOf(AssistantRole.state(this))
+            }
+            var roleRequestRefused by rememberSaveable { mutableStateOf(false) }
+            val roleLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult(),
+            ) {
+                assistantRoleState = AssistantRole.state(this)
+                roleRequestRefused = AssistantRole.state(this) != AssistantRoleState.Held
+            }
+            val onRequestAssistantRole: () -> Unit = {
+                val intent = AssistantRole.requestIntent(this)
+                if (intent == null) {
+                    roleRequestRefused = true
+                } else {
+                    roleLauncher.launch(intent)
+                }
+            }
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) {
+                        assistantRoleState = AssistantRole.state(this@MainActivity)
+                        if (assistantRoleState == AssistantRoleState.Held) {
+                            roleRequestRefused = false
+                        }
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
+
+            val assistRequested by pendingAssist
+            LaunchedEffect(assistRequested) {
+                if (!assistRequested) {
+                    return@LaunchedEffect
+                }
+                screen = AppScreen.Call
+                appViewModel.onAssistRequested()
+                requestCallMicPermission()
+                pendingAssist.value = false
+            }
+
             val attachmentPanel: @Composable () -> Unit = {
                 AttachmentPanel(
                     uploads = uploads,
@@ -162,6 +213,9 @@ class MainActivity : ComponentActivity() {
                     requestCallMicPermission = requestCallMicPermission,
                     requestBatteryExemption = requestBatteryExemption,
                     setWakeWordEnabled = setWakeWordEnabled,
+                    assistantRoleState = assistantRoleState,
+                    assistantRoleRequestRefused = roleRequestRefused,
+                    onRequestAssistantRole = onRequestAssistantRole,
                 )
             }
         }
@@ -170,18 +224,19 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleShareIntent(intent)
+        handleIncomingIntent(intent)
     }
 
-    private fun handleShareIntent(intent: Intent?) {
+    private fun handleIncomingIntent(intent: Intent?) {
         if (intent == null) {
             return
         }
-        if (
-            intent.action == Intent.ACTION_SEND ||
-            intent.action == Intent.ACTION_SEND_MULTIPLE
-        ) {
-            pendingShare.value = intent
+        when (intent.action) {
+            Intent.ACTION_SEND,
+            Intent.ACTION_SEND_MULTIPLE,
+            -> pendingShare.value = intent
+
+            Intent.ACTION_ASSIST -> pendingAssist.value = true
         }
     }
 }
@@ -198,6 +253,9 @@ private fun AppRoot(
     requestCallMicPermission: () -> Unit,
     requestBatteryExemption: () -> Unit,
     setWakeWordEnabled: (Boolean) -> Unit,
+    assistantRoleState: AssistantRoleState,
+    assistantRoleRequestRefused: Boolean,
+    onRequestAssistantRole: () -> Unit,
 ) {
     when (screen) {
         AppScreen.Settings -> SettingsScreen(
@@ -213,6 +271,9 @@ private fun AppRoot(
             },
             onFetchFingerprint = viewModel::fetchFingerprint,
             onToggleTokenVisibility = viewModel::toggleTokenVisibility,
+            assistantRole = assistantRoleState,
+            assistantRoleRequestRefused = assistantRoleRequestRefused,
+            onRequestAssistantRole = onRequestAssistantRole,
         )
 
         AppScreen.Connection -> ConnectionScreen(

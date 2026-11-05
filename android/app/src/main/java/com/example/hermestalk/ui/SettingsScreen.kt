@@ -44,6 +44,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.hermestalk.AppUiState
+import com.example.hermestalk.AssistantRoleState
 import com.example.hermestalk.FingerprintState
 import com.example.hermestalk.R
 import com.example.hermestalk.rtvi.ConnectionState
@@ -67,6 +68,9 @@ fun SettingsScreen(
     onConnect: (String, String, String, Boolean) -> Unit,
     onFetchFingerprint: (String) -> Unit,
     onToggleTokenVisibility: () -> Unit,
+    assistantRole: AssistantRoleState,
+    assistantRoleRequestRefused: Boolean,
+    onRequestAssistantRole: () -> Unit,
 ) {
     var relayUrl by rememberSaveable(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
     var token by rememberSaveable(uiState.deviceToken) { mutableStateOf(uiState.deviceToken) }
@@ -365,6 +369,69 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_assistant_role"),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.assistant_role_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = stringResource(
+                            when (assistantRole) {
+                                AssistantRoleState.Held -> R.string.assistant_role_held
+                                AssistantRoleState.NotHeld -> R.string.assistant_role_not_held
+                                AssistantRoleState.Unavailable ->
+                                    R.string.assistant_role_unavailable
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    when (assistantRole) {
+                        AssistantRoleState.NotHeld -> {
+                            Button(
+                                onClick = onRequestAssistantRole,
+                                modifier = Modifier.testTag(
+                                    "settings_assistant_role_button",
+                                ),
+                            ) {
+                                Text(stringResource(R.string.assistant_role_request))
+                            }
+                            if (assistantRoleRequestRefused) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.assistant_role_request_refused_hint,
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag(
+                                        "settings_assistant_role_refused",
+                                    ),
+                                )
+                            }
+                        }
+
+                        AssistantRoleState.Held -> {
+                            Text(
+                                text = stringResource(R.string.assistant_role_held_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        AssistantRoleState.Unavailable -> Unit
+                    }
+                }
             }
 
             Spacer(Modifier.height(4.dp))

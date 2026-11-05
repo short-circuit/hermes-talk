@@ -44,6 +44,14 @@
     <string name="not_available">Not available</string>
     <string name="tls_no_retry_hint">No automatic retry. Fix the pin or install the internal CA, then connect again.</string>
 
+    <string name="assistant_role_title">Default assistant</string>
+    <string name="assistant_role_held">Hermes Talk is the default assistant</string>
+    <string name="assistant_role_held_hint">A long press of the power button opens the call screen.</string>
+    <string name="assistant_role_not_held">Hermes Talk is not the default assistant. The assist gesture opens another app.</string>
+    <string name="assistant_role_unavailable">This device does not offer the assistant role.</string>
+    <string name="assistant_role_request">Set as default assistant</string>
+    <string name="assistant_role_request_refused_hint">The system closed the request dialog. Set Hermes Talk as the digital assistant app in Settings → Apps → Default apps → Digital assistant app.</string>
+
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_connected">Connected</string>

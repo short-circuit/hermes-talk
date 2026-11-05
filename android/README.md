@@ -231,6 +231,90 @@ files directory and logs the summary under the `WakeWordUsage` tag. See
 [`wakeword/README.md`](wakeword/README.md) for the model provenance, tuning,
 sensitivity presets and the false-trigger log.
 
+## Default assistant role and the assist gesture
+
+`MainActivity` registers an exported `android.intent.action.ASSIST` intent filter
+with `android.intent.category.DEFAULT` and keeps `launchMode="singleTop"`, so the
+system assist gesture (typically a long press of the power button, `KEYCODE_ASSIST`)
+opens the call screen. The existing MAIN/LAUNCHER and SEND/SEND_MULTIPLE filters
+are unchanged.
+
+The Settings screen shows a "Default assistant" card with the current
+`AssistantRoleState` (`Held`, `NotHeld` or `Unavailable`). When the role is not
+held, the button requests `android.app.role.ASSISTANT` through
+`RoleManager.createRequestRoleIntent`; the system owns the confirmation dialog.
+The role is a user-controlled privilege, so the app re-queries
+`AssistantRole.state()` on every `ON_RESUME` and after the request dialog
+returns. A user can revoke the role from system Settings at any time; revocation
+only flips the card back to `NotHeld`. It does not crash the app and does not
+restart the foreground call service. The assist gesture follows the current role
+holder: when another app holds the role the gesture opens that app, while Hermes
+Talk stays reachable through explicit `ACTION_ASSIST` intents and the card
+reports `NotHeld`.
+
+The in-app request button is best-effort. The permission controller only shows
+the role dialog for requestable roles, and some images mark
+`android.app.role.ASSISTANT` as `requestable=false` (the Google-APIs API 34
+emulator image does; the value is visible in the permission controller's
+`roles.xml`). There the request activity logs "Role is not requestable" and
+closes immediately, so the card keeps reporting `NotHeld` and shows a hint that
+points at the grant paths below instead of looking like a silent dead end.
+
+Grant paths verified on the API 34 emulator image:
+
+- Settings → Apps → Default apps → Digital assistant app → Hermes Talk → OK
+  grants the role. `adb shell settings get secure assistant` then reads
+  `com.example.hermestalk/.MainActivity`.
+- `adb shell cmd role add-role-holder android.app.role.ASSISTANT com.example.hermestalk`
+  grants it from a development machine.
+
+Grant and verify the role from a development machine:
+
+```sh
+adb shell cmd role add-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell cmd role get-role-holders android.app.role.ASSISTANT
+adb shell input keyevent 219
+adb shell dumpsys activity activities | grep -i hermestalk
+```
+
+`KEYCODE_ASSIST` is 219. Revoke the role and repeat the gesture to confirm the
+absence path:
+
+```sh
+adb shell cmd role remove-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell input keyevent 219
+```
+
+The app must still open from an explicit assist intent, with no crash and no
+service restart, and the Settings card must report `NotHeld`:
+
+```sh
+adb shell cmd role remove-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell am start -a android.intent.action.ASSIST -n com.example.hermestalk/.MainActivity
+```
+
+The gesture itself follows the role holder, so after revocation it opens the app
+that holds the role again.
+
+Measured on the API 34 emulator (`hermes_talk_34`, Google-APIs image):
+
+| Step | Observed |
+|---|---|
+| `cmd role add-role-holder … com.example.hermestalk` | exit 0; `cmd role get-role-holders` lists `com.example.hermestalk` |
+| `settings get secure assistant` after the grant | `com.example.hermestalk/.MainActivity` |
+| `input keyevent 219` after the grant | top resumed activity `com.example.hermestalk/.MainActivity`, call screen showing `Call` / `Ready to call` |
+| `cmd role remove-role-holder` then `input keyevent 219` | app process alive, zero `FATAL EXCEPTION` entries; the gesture goes to the restored holder |
+| in-app request button on this image | permission controller logs `Role is not requestable: android.app.role.ASSISTANT` and returns `RESULT_CANCELED`; the card keeps `NotHeld` and shows the hint |
+
+The instrumentation coverage launches `MainActivity` with an `ACTION_ASSIST`
+intent and renders the settings card for all three states:
+
+```sh
+cd android
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.example.hermestalk.assistant.AssistantRoleTest
+```
+
 ## Attachments and relay artifacts
 
 The `:attachments` module (namespace

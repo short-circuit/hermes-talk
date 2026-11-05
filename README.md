@@ -62,6 +62,17 @@ docker compose -f deploy/compose.yaml up -d
 cd android && ./gradlew assembleDebug
 ```
 
+## Default assistant
+
+The Android app registers an `ACTION_ASSIST` entry point and can be granted the
+system assistant role, so a long press of the power button opens the call screen.
+Grant and verify the role holder from a development machine:
+
+```sh
+adb shell cmd role add-role-holder android.app.role.ASSISTANT com.example.hermestalk
+adb shell cmd role get-role-holders android.app.role.ASSISTANT
+```
+
 ## License
 
 MIT — see `LICENSE`.
