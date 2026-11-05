@@ -34,8 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.hermestalk.call.AudioRoute
@@ -52,7 +55,7 @@ import com.example.hermestalk.call.isLive
  * delegated to the caller so the screen can be rendered in tests without a
  * controller or an Android audio stack.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun CallScreen(
     uiState: CallUiState,
@@ -72,6 +75,8 @@ fun CallScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .semantics { testTagsAsResourceId = true }
+            .testTag("call_screen")
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),

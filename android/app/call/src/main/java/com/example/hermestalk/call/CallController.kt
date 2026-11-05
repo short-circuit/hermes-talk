@@ -40,6 +40,7 @@ class CallController(
     private val battery: BatteryOptimisation,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val micCoordinator: AssistantMicCoordinator = NoAssistantMicCoordinator,
 ) {
 
     private val _uiState = MutableStateFlow(CallUiState())
@@ -188,6 +189,11 @@ class CallController(
             session = null
         }
         safely { foreground.stop() }
+        try {
+            micCoordinator.resumeWakeWord()
+        } catch (error: Exception) {
+            log("wake-word resume failed: ${error.message}")
+        }
         scope.cancel()
     }
 
@@ -232,6 +238,11 @@ class CallController(
 
                 CallEffect.StartForegroundService -> {
                     try {
+                        micCoordinator.suspendWakeWord()
+                    } catch (error: Exception) {
+                        log("wake-word suspend failed: ${error.message}")
+                    }
+                    try {
                         foreground.start()
                     } catch (error: Exception) {
                         log("foreground start failed: ${error.message}")
@@ -262,6 +273,11 @@ class CallController(
                     foreground.stop()
                     stopMicMonitoring()
                     stopRouteMonitoring()
+                    try {
+                        micCoordinator.resumeWakeWord()
+                    } catch (error: Exception) {
+                        log("wake-word resume failed: ${error.message}")
+                    }
                 }
 
                 CallEffect.ConnectSession -> connectSession()
@@ -514,5 +530,6 @@ object CallControllers {
         micMonitor = AndroidMicActivityMonitor(context),
         foreground = AndroidCallForegroundController(context),
         battery = AndroidBatteryOptimisation(context),
+        micCoordinator = ProcessAssistantMicCoordinator(),
     )
 }

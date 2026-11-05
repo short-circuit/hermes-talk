@@ -75,6 +75,14 @@ adb shell cmd role add-role-holder android.app.role.ASSISTANT com.example.hermes
 adb shell cmd role get-role-holders android.app.role.ASSISTANT
 ```
 
+With the persistent assistant enabled, the same foreground service also runs
+the on-device "Hey Hermes" keyword spotter: a detection launches the assistant
+through `ACTION_ASSIST`, and a live call always takes the microphone first. The
+wake-word toggle, counts and status live on the Settings screen. See
+`android/README.md` ("On-device wake word") and
+`docs/TESTING.md` ("Always-on wake word inside the persistent assistant
+service") for the commands and measured results.
+
 ## License
 
 MIT — see `LICENSE`.

@@ -15,6 +15,14 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.example.hermestalk.wakeword.SharedPreferencesWakeWordSettingsStore
+import com.example.hermestalk.wakeword.WakeWordConfig
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Always-on assistant foreground service.
@@ -37,12 +45,61 @@ class PersistentAssistantService : Service() {
     private var listening = false
     private var foregroundStarted = false
     private var foregroundType = AssistantForegroundType.None
+    private var wakeWordEnabled = false
+    private var wakeWordRunner: AssistantWakeWordRunner? = null
+    private var serviceScope: CoroutineScope? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        createWakeWordRunner()
+        startCallLiveObserver()
+    }
+
+    private fun createWakeWordRunner() {
+        try {
+            wakeWordRunner = AssistantWakeWordRunner.create(this) { listening ->
+                this.listening = listening
+                if (foregroundStarted) {
+                    updateForegroundNotification()
+                }
+                applyWakeLockPolicy()
+            }.also { runner ->
+                AssistantWakeWord.runner = runner
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not create the wake-word runner", error)
+            wakeWordRunner = null
+        }
+    }
+
+    /**
+     * Observe the process-wide call state. The RTVI controller is constructed
+     * on the main thread here; a construction failure must never crash the
+     * service, so the lookup is wrapped.
+     */
+    private fun startCallLiveObserver() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        serviceScope = scope
+        scope.launch {
+            val controller = try {
+                CallControllers.get(this@PersistentAssistantService)
+            } catch (error: Exception) {
+                Log.w(TAG, "Could not observe the call state", error)
+                return@launch
+            }
+            try {
+                controller.uiState.collect { uiState ->
+                    wakeWordRunner?.onCallLiveChanged(uiState.state.isLive)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Call state observer stopped", error)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +112,19 @@ class PersistentAssistantService : Service() {
             ACTION_PROMOTE_MIC -> {
                 ensureForeground(retryMicrophone = true)
                 updateForegroundNotification()
+                wakeWordRunner?.onForegroundTypeChanged(foregroundType)
+                wakeWordRunner?.setEnabled(wakeWordEnabled)
+            }
+
+            ACTION_SET_WAKE_WORD -> {
+                wakeWordEnabled = intent.getBooleanExtra(EXTRA_WAKE_WORD_ENABLED, false)
+                if (foregroundStarted) {
+                    updateForegroundNotification()
+                } else {
+                    ensureForeground()
+                }
+                applyWakeWordRunnerSettings()
+                applyWakeLockPolicy()
             }
 
             ACTION_SET_LISTENING -> {
@@ -69,6 +139,7 @@ class PersistentAssistantService : Service() {
 
             ACTION_START, null -> {
                 listening = false
+                wakeWordEnabled = readWakeWordEnabled()
                 ensureForeground()
                 applyWakeLockPolicy()
             }
@@ -76,6 +147,7 @@ class PersistentAssistantService : Service() {
             else -> {
                 if (!foregroundStarted) {
                     listening = false
+                    wakeWordEnabled = readWakeWordEnabled()
                     ensureForeground()
                 }
                 applyWakeLockPolicy()
@@ -91,6 +163,10 @@ class PersistentAssistantService : Service() {
     }
 
     override fun onDestroy() {
+        serviceScope?.cancel()
+        serviceScope = null
+        wakeWordRunner?.release()
+        wakeWordRunner = null
         releaseWakeLock()
         foregroundStarted = false
         foregroundType = AssistantForegroundType.None
@@ -185,6 +261,38 @@ class PersistentAssistantService : Service() {
             )
         }
         applyWakeLockPolicy()
+        applyWakeWordRunnerSettings()
+    }
+
+    /**
+     * The service owns wake-word configuration and persistence; the app only
+     * sends the enabled flag. Sensitivity is re-read on every start/setEnabled
+     * so the stored preference applies without another API.
+     */
+    private fun applyWakeWordRunnerSettings() {
+        val runner = wakeWordRunner ?: return
+        val settings = try {
+            SharedPreferencesWakeWordSettingsStore(this).load()
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not read the wake-word settings", error)
+            null
+        }
+        if (settings != null) {
+            try {
+                runner.updateConfig(WakeWordConfig(sensitivity = settings.sensitivity))
+            } catch (error: Exception) {
+                Log.w(TAG, "Could not apply the wake-word sensitivity", error)
+            }
+        }
+        runner.onForegroundTypeChanged(foregroundType)
+        runner.setEnabled(wakeWordEnabled)
+    }
+
+    private fun readWakeWordEnabled(): Boolean = try {
+        SharedPreferencesWakeWordSettingsStore(this).load().enabled
+    } catch (error: Exception) {
+        Log.w(TAG, "Could not read the wake-word enabled flag", error)
+        false
     }
 
     private fun updateForegroundNotification() {
@@ -240,6 +348,10 @@ class PersistentAssistantService : Service() {
     }
 
     private fun stopCleanly() {
+        serviceScope?.cancel()
+        serviceScope = null
+        wakeWordRunner?.release()
+        wakeWordRunner = null
         releaseWakeLock()
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -321,8 +433,12 @@ class PersistentAssistantService : Service() {
         const val ACTION_PROMOTE_MIC = "com.example.hermestalk.call.action.PROMOTE_MIC"
         const val ACTION_SET_LISTENING =
             "com.example.hermestalk.call.action.SET_ASSISTANT_LISTENING"
+        const val ACTION_SET_WAKE_WORD =
+            "com.example.hermestalk.call.action.SET_ASSISTANT_WAKE_WORD"
 
         const val EXTRA_LISTENING = "com.example.hermestalk.call.extra.LISTENING"
+        const val EXTRA_WAKE_WORD_ENABLED =
+            "com.example.hermestalk.call.extra.WAKE_WORD_ENABLED"
 
         const val NOTIFICATION_ID = 4201
         const val CHANNEL_ID = "hermes_talk_assistant"

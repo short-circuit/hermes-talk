@@ -19,6 +19,8 @@ import com.example.hermestalk.call.PersistentAssistant
 import com.example.hermestalk.call.PersistentAssistantController
 import com.example.hermestalk.call.PersistentAssistantService
 import com.example.hermestalk.call.SharedPreferencesPersistentAssistantSettingsStore
+import com.example.hermestalk.wakeword.SharedPreferencesWakeWordSettingsStore
+import com.example.hermestalk.wakeword.WakeWordSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -58,6 +60,9 @@ class PersistentAssistantServiceTest {
     @Before
     fun disablePersistentAssistantAutoStart() {
         SharedPreferencesPersistentAssistantSettingsStore(context).setEnabled(false)
+        SharedPreferencesWakeWordSettingsStore(context).save(
+            WakeWordSettings(enabled = false),
+        )
     }
 
     @Test

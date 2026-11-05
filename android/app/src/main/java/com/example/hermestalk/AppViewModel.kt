@@ -10,6 +10,9 @@ import com.example.hermestalk.attachments.ArtifactUiState
 import com.example.hermestalk.attachments.Attachments
 import com.example.hermestalk.attachments.UploadItem
 import com.example.hermestalk.call.AndroidBatteryOptimisation
+import com.example.hermestalk.call.AssistantWakeWord
+import com.example.hermestalk.call.AssistantWakeWordController
+import com.example.hermestalk.call.AssistantWakeWordState
 import com.example.hermestalk.call.AudioRoute
 import com.example.hermestalk.call.CallControllers
 import com.example.hermestalk.call.CallUiState
@@ -94,6 +97,7 @@ data class AppUiState(
     val falseTriggerCount: Int = 0,
     val persistentEnabled: Boolean = false,
     val batteryExempt: Boolean = false,
+    val wakeWordAssistant: AssistantWakeWordState = AssistantWakeWordState(),
 )
 
 /**
@@ -166,6 +170,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Observable always-on assistant service state. */
     val persistentState: StateFlow<PersistentAssistantState> = PersistentAssistant.state
 
+    /** Observable wake-word runner state inside the persistent service. */
+    val wakeWordAssistantState: StateFlow<AssistantWakeWordState> = AssistantWakeWord.state
+
     /** Observable attachment upload queue. */
     val uploadItems: StateFlow<List<UploadItem>> = attachmentsController.uploads
 
@@ -181,13 +188,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             wakeWordController.state.collect { state ->
                 _uiState.update { it.copy(wakeWordState = state) }
-                if (_uiState.value.persistentEnabled) {
-                    PersistentAssistantController.setListening(
-                        getApplication(),
-                        state is WakeWordState.Listening &&
-                            !callState.value.state.isLive,
-                    )
-                }
+            }
+        }
+        viewModelScope.launch {
+            AssistantWakeWord.state.collect { state ->
+                _uiState.update { it.copy(wakeWordAssistant = state) }
             }
         }
         viewModelScope.launch {
@@ -208,13 +213,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             callState.collect { state ->
                 val live = state.state.isLive
-                if (live && !callWasLive) {
-                    wakeWordController.stop()
-                    if (_uiState.value.persistentEnabled) {
-                        PersistentAssistantController.setListening(getApplication(), false)
+                if (!persistentSettings.isEnabled()) {
+                    if (live && !callWasLive) {
+                        wakeWordController.stop()
+                    } else if (
+                        !live &&
+                        callWasLive &&
+                        _uiState.value.wakeWordEnabled
+                    ) {
+                        wakeWordController.start()
                     }
-                } else if (!live && callWasLive && _uiState.value.wakeWordEnabled) {
-                    wakeWordController.start()
                 }
                 callWasLive = live
             }
@@ -247,7 +255,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             wakeWordController.updateConfig(WakeWordConfig(sensitivity = settings.sensitivity))
-            if (settings.enabled && !callState.value.state.isLive) {
+            if (
+                settings.enabled &&
+                !persistentSettings.isEnabled() &&
+                !callState.value.state.isLive
+            ) {
                 wakeWordController.start()
             }
         }
@@ -262,7 +274,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (!PersistentAssistant.state.value.running) {
                     PersistentAssistantController.startFromForeground(getApplication())
                 }
-                syncPersistentListening()
             }
         }
     }
@@ -523,7 +534,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ),
         )
         _uiState.update { it.copy(wakeWordEnabled = enabled) }
-        if (enabled) {
+        val application = getApplication<Application>()
+        if (persistentSettings.isEnabled()) {
+            wakeWordController.stop()
+            AssistantWakeWordController.setEnabled(application, enabled)
+        } else if (enabled) {
             if (!callState.value.state.isLive) {
                 wakeWordController.start()
             }
@@ -541,14 +556,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ),
         )
         _uiState.update { it.copy(wakeWordSensitivity = preset) }
-        wakeWordController.updateConfig(WakeWordConfig(sensitivity = preset))
+        if (persistentSettings.isEnabled()) {
+            AssistantWakeWordController.setEnabled(
+                getApplication(),
+                _uiState.value.wakeWordEnabled,
+            )
+        } else {
+            wakeWordController.updateConfig(WakeWordConfig(sensitivity = preset))
+        }
     }
 
     /** Feed the wake-word microphone permission result back into the controller. */
     fun onWakeWordPermissionResult(granted: Boolean) {
         if (granted) {
             if (_uiState.value.wakeWordEnabled) {
-                wakeWordController.start()
+                if (persistentSettings.isEnabled()) {
+                    AssistantWakeWordController.setEnabled(getApplication(), true)
+                } else {
+                    wakeWordController.start()
+                }
             }
         } else {
             setWakeWordEnabled(true)
@@ -628,23 +654,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(persistentEnabled = enabled) }
         val application = getApplication<Application>()
         if (enabled) {
+            wakeWordController.stop()
             PersistentAssistantController.startFromForeground(application)
-            syncPersistentListening()
+            AssistantWakeWordController.setEnabled(
+                application,
+                _uiState.value.wakeWordEnabled,
+            )
         } else {
             PersistentAssistantController.stop(application)
+            if (_uiState.value.wakeWordEnabled && !callState.value.state.isLive) {
+                wakeWordController.start()
+            }
         }
         refreshPersistentAssistantState()
-    }
-
-    private fun syncPersistentListening() {
-        if (!_uiState.value.persistentEnabled) {
-            return
-        }
-        PersistentAssistantController.setListening(
-            getApplication(),
-            wakeWordController.state.value is WakeWordState.Listening &&
-                !callState.value.state.isLive,
-        )
     }
 
     /** Re-read the persisted assistant flag after the app returns to the foreground. */
@@ -671,7 +693,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        if (_uiState.value.persistentEnabled || PersistentAssistant.state.value.running) {
+        if (
+            !persistentSettings.isEnabled() &&
+            PersistentAssistant.state.value.running
+        ) {
             PersistentAssistantController.setListening(getApplication(), false)
         }
         wakeWordController.release()

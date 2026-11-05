@@ -34,6 +34,7 @@ kotlin {
 
 dependencies {
     implementation(project(":rtvi"))
+    implementation(project(":wakeword"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation(platform("androidx.compose:compose-bom:2025.12.01"))

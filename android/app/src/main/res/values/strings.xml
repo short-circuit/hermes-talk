@@ -64,6 +64,15 @@
     <string name="settings_persistent_battery">Allow background activity</string>
     <string name="settings_persistent_battery_hint">Battery optimisation must be off. Verify with: adb shell dumpsys deviceidle whitelist +com.example.hermestalk</string>
 
+    <string name="settings_wake_word_toggle">Listen for “Hey Hermes”</string>
+    <string name="settings_wake_word_hint">Runs on-device inside the background assistant. A live call takes the microphone.</string>
+    <string name="settings_wake_word_status_listening">Wake word: listening on-device</string>
+    <string name="settings_wake_word_status_off">Wake word: off</string>
+    <string name="settings_wake_word_status_call">Wake word: off (mic owner is the call)</string>
+    <string name="settings_wake_word_status_disabled">Wake word: not enabled</string>
+    <string name="settings_wake_word_status_failed">Wake word failed: %1$s</string>
+    <string name="settings_wake_word_counts">Detections: %1$d · false triggers: %2$d · last launch: %3$d ms</string>
+
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_connected">Connected</string>

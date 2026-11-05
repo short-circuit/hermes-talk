@@ -475,3 +475,134 @@ batterystats time, 99.1% of it screen off):
   above is derived from `batterystats` estimated power, not from a level change.
 - `dumpsys power` reported `Wake Locks: size=0` for the whole window, so the
   service adds no wake-lock cost when it is not listening.
+
+## Always-on wake word inside the persistent assistant service
+
+When the persistent assistant is enabled, `PersistentAssistantService` also runs
+the on-device keyword spotter from `:wakeword` (`AssistantWakeWordRunner`). The
+runner is owned by the service, not by `MainActivity`: it starts listening on
+service start, restores the audio path after every detection, and launches the
+assistant with an `ACTION_ASSIST` intent carrying
+`EXTRA_WAKE_WORD = true`. Detection telemetry is logged under the
+`AssistantWakeWord` tag, with the aggregate counters and launch budget under
+`WakeWordUsage`. The Settings screen shows the enabled toggle, the current state
+and the detection/false-trigger counts.
+
+Microphone ownership is coordinated by `AssistantMicCoordinator`: a live call
+always wins. Starting a call suspends the runner (the capture thread exits and
+`AudioRecord` is released), and ending the call resumes it only when wake word
+and the persistent assistant are still enabled. Disabling the wake word releases
+the same resources. `AssistantWakeWordPolicy` is the single decision point for
+these rules, including the 1000 ms detection-to-call budget and the restart
+delay.
+
+### Test inventory
+
+- JVM policy (`android/app/call/src/test/java/com/example/hermestalk/call/AssistantWakeWordPolicyTest.kt`):
+  enablement gates, microphone foreground type, `RECORD_AUDIO`, call precedence,
+  restart delay, detection-step order and budget boundaries.
+- JVM runner (`android/app/call/src/test/java/com/example/hermestalk/call/AssistantWakeWordRunnerTest.kt`):
+  ordered detection steps, resume after the delay, suspend while a call is live,
+  disable/release idempotence and the measured-latency budget flag.
+- Instrumentation
+  (`android/app/src/androidTest/java/com/example/hermestalk/persistent/AssistantWakeWordServiceTest.kt`):
+  `fixturesAreDetectedWithZeroMissesAndNoFalseTriggers` (the whole committed
+  fixture set through the service capture path),
+  `wakeWordDetectionLaunchesTheAssistantWithinBudget`,
+  `liveCallSuspendsWakeWordAndResumeRestoresCapture`,
+  `disablingWakeWordStopsCaptureAndReleasesAudio` and
+  `continuousListeningForTheConfiguredWindow` (`@LargeTest`, default soak
+  1800 s, overridable with `-e wakeWordSoakSeconds <seconds>`).
+  The tests replace the capture with `FixtureWakeWordCapture`, which feeds the
+  checked-in positive/negative WAV fixtures through the real keyword engine; the
+  service, runner, policy and audio lifecycle stay real. The fixture-set test
+  stubs only the Activity launch (the production launch starts a relay call,
+  which correctly suspends the wake word); the launch path is covered by
+  `wakeWordDetectionLaunchesTheAssistantWithinBudget`.
+
+### Commands
+
+```sh
+cd android
+./gradlew :app:call:testDebugUnitTest :wakeword:test :app:testDebugUnitTest --console=plain
+./gradlew :app:assembleDebug --console=plain
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am instrument -w \
+  -e class com.example.hermestalk.persistent.AssistantWakeWordServiceTest \
+  com.example.hermestalk.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+### Results
+
+Run on 2026-11-05 against the archive AVD `hermes_talk_34` (API 34, x86_64,
+`emulator-5554`), from the working tree at `feat/rtvi-call-loop`.
+
+JVM gates: `./gradlew :app:call:testDebugUnitTest :wakeword:test
+:app:testDebugUnitTest` → `BUILD SUCCESSFUL`; the JUnit XML records
+`:app:call` 82 tests, `:wakeword` 60 tests and `:app` 9 tests, all with
+`failures="0" errors="0" skipped="0"` (151 tests total).
+`./gradlew :app:assembleDebug` → `BUILD SUCCESSFUL`; `adb install -r` →
+`Performing Streamed Install` / `Success`. The full `./gradlew test` suite over
+every module (debug and release variants) reports 560 tests, `failures="0"`,
+`errors="0"`, `skipped="0"`.
+
+Instrumentation, full class with a shortened soak
+(`-e wakeWordSoakSeconds 10`): `OK (5 tests)`, `Time: 185.09`, 0 failures and
+0 errors. The soak test was also run once with its default 1800 s window before
+the fixture-set test was added (production code unchanged since):
+`OK (4 tests)`, `Time: 1,814.792`, 0 failures and 0 errors.
+
+| Test | Scenario | Outcome | Measured |
+|---|---|---|---|
+| `fixturesAreDetectedWithZeroMissesAndNoFalseTriggers` | all 10 positive fixtures followed by the 3 negatives played through the service capture path | passed | `fixture_set positives=10 negatives=3 detections=10 false_trigger_count=69` — one detection per positive, no negative hit |
+| `wakeWordDetectionLaunchesTheAssistantWithinBudget` | positive fixture detected while the service is listening; `ACTION_ASSIST` launch and `CallScreen` visibility | passed | `detection_launch_latency_ms=130 within_budget=true detection_count=1 false_trigger_count=35` |
+| `liveCallSuspendsWakeWordAndResumeRestoresCapture` | call start releases `AudioRecord` and stops the capture thread; resume reacquires both; service stop releases them | passed | assertions held across suspend, settle and resume |
+| `disablingWakeWordStopsCaptureAndReleasesAudio` | stored toggle off stops capture and releases audio; toggle on starts it again | passed | assertions held on disable and re-enable |
+| `continuousListeningForTheConfiguredWindow` | screen-off soak with the same pid, service running and capture alive | passed | `listening_wall_ms=1800138 cpu_ms=74790 detection_count=0` over 1800 s |
+
+Detection step timings from the `AssistantWakeWord` logcat lines emitted by the
+positive-fixture test (all steps completed inside the 1000 ms budget):
+
+| Step | Measured |
+|---|---|
+| `StopCapture` | 112 ms |
+| `ReleaseListeningWakeLock` | 1 ms |
+| `AbandonAudioFocus` | 1 ms |
+| `ClearCommunicationDevice` | 1 ms |
+| `ExitCommunicationMode` | 1 ms |
+| `LaunchAssistant` | 5 ms |
+
+The `false_trigger_count` values are the recorded tail of the on-device
+false-trigger log (accepted detections accumulate across runs on the same
+device), not a per-test count; the fixture-set run added exactly 10 entries and
+the launch run 1. The soak deliberately used the negative fixture, so its
+`detection_count=0` is the expected result. The soak's CPU figure is measured
+with the scripted capture source, which adds a 100 ms sleep loop; the real
+`AudioRecord` cost measured by `:wakeword`'s `WakeWordBatteryTest` is
+83.9 s CPU per hour (2.3% of one core), i.e. roughly 11-17 mAh/h by the
+documented energy model.
+
+### Background-activity-launch limitation
+
+`AssistantWakeWord` launches `MainActivity` from a foreground service. A
+foreground service is **not** a background-activity-launch (BAL) exemption on
+Android 14+, so the platform may silently refuse the `startActivity` while the
+app is not visible. The launch path therefore records the measured latency and
+any exception; the persistent notification's content intent remains the
+one-tap fallback. Instrumentation grants the target process BAL privileges, so
+the emulator accepts the launch and the tests can assert the `CallScreen`
+appears. That privilege is not present on a stock device.
+
+### Placeholder: real-device BAL verification
+
+The emulator run proves detection, audio restore, call precedence and the
+launch budget under granted BAL. It does **not** prove that a stock Android 14+
+device will bring `MainActivity` to the foreground from the service. Record a
+physical-device run here when one is available; until then this block is
+intentionally unmeasured.
+
+| Check | Expected | Result |
+|---|---|---|
+| screen off, wake word detected, no app visible | assistant opens within the 1000 ms budget, or the notification fallback is used | not run |
+| launch refused by BAL | `lastLaunchStarted=false`, notification content intent opens the assistant | not run |
+| call ends while wake word and assistant remain enabled | capture resumes and `AudioRecord` is reacquired | not run |

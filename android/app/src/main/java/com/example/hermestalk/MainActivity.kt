@@ -3,6 +3,7 @@ package com.example.hermestalk
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,7 +24,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hermestalk.attachments.ui.AttachmentPanel
+import com.example.hermestalk.call.AssistantWakeWordState
 import com.example.hermestalk.call.CallUiState
+import com.example.hermestalk.call.EXTRA_WAKE_WORD
 import com.example.hermestalk.call.ui.CallScreen
 import com.example.hermestalk.ui.ConnectionScreen
 import com.example.hermestalk.ui.HermesTalkTheme
@@ -52,6 +55,8 @@ class MainActivity : ComponentActivity() {
             val artifactState by appViewModel.artifactState.collectAsStateWithLifecycle()
             val attachmentError by appViewModel.attachmentError.collectAsStateWithLifecycle()
             val persistentState by appViewModel.persistentState.collectAsStateWithLifecycle()
+            val wakeWordAssistant by
+                appViewModel.wakeWordAssistantState.collectAsStateWithLifecycle()
             var screen by rememberSaveable { mutableStateOf(AppScreen.Settings) }
 
             val sharedIntent by pendingShare
@@ -239,6 +244,7 @@ class MainActivity : ComponentActivity() {
                     setWakeWordEnabled = setWakeWordEnabled,
                     setPersistentAssistantEnabled = setPersistentAssistantEnabled,
                     persistentState = persistentState,
+                    wakeWordAssistant = wakeWordAssistant,
                     assistantRoleState = assistantRoleState,
                     assistantRoleRequestRefused = roleRequestRefused,
                     onRequestAssistantRole = onRequestAssistantRole,
@@ -262,7 +268,15 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_SEND_MULTIPLE,
             -> pendingShare.value = intent
 
-            Intent.ACTION_ASSIST -> pendingAssist.value = true
+            Intent.ACTION_ASSIST -> {
+                if (intent.getBooleanExtra(EXTRA_WAKE_WORD, false) &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1
+                ) {
+                    setTurnScreenOn(true)
+                    setShowWhenLocked(true)
+                }
+                pendingAssist.value = true
+            }
         }
     }
 }
@@ -281,6 +295,7 @@ private fun AppRoot(
     setWakeWordEnabled: (Boolean) -> Unit,
     setPersistentAssistantEnabled: (Boolean) -> Unit,
     persistentState: com.example.hermestalk.call.PersistentAssistantState,
+    wakeWordAssistant: AssistantWakeWordState,
     assistantRoleState: AssistantRoleState,
     assistantRoleRequestRefused: Boolean,
     onRequestAssistantRole: () -> Unit,
@@ -307,6 +322,9 @@ private fun AppRoot(
             persistentState = persistentState,
             onPersistentEnabledChange = setPersistentAssistantEnabled,
             onRequestBatteryExemption = requestBatteryExemption,
+            wakeWordAssistant = wakeWordAssistant,
+            wakeWordEnabled = uiState.wakeWordEnabled,
+            onWakeWordEnabledChange = setWakeWordEnabled,
         )
 
         AppScreen.Connection -> ConnectionScreen(

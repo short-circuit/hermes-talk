@@ -203,31 +203,53 @@ its SHA-256 and extracts only the `arm64-v8a` and `x86_64` JNI folders. The firs
 build therefore needs network access; later builds skip the download when the
 extracted directory is complete. The app is limited to those two ABIs.
 
-The wake word is foreground-only. The module never creates or restarts a
-foreground service. It stops listening before a call starts so the call owns the
-microphone and resumes when the call ends if the preference is still enabled.
-Push-to-talk is available as a fallback even when the keyword engine or native
-library is unavailable.
+The wake word runs inside the persistent assistant foreground service rather
+than in the activity. When both the persistent assistant and the wake-word
+toggle are enabled, `PersistentAssistantService` starts
+`AssistantWakeWordRunner`; a detection restores the audio path and launches
+`MainActivity` with `ACTION_ASSIST` plus the `EXTRA_WAKE_WORD` extra. The
+Settings screen shows the toggle, the current state and the detection and
+false-trigger counts.
+
+A live call always wins the microphone. Starting a call suspends the runner,
+stops the capture thread and releases `AudioRecord`; ending the call resumes it
+only while the persistent assistant and wake word are still enabled. Disabling
+the toggle releases the same resources. Push-to-talk is available as a fallback
+even when the keyword engine or native library is unavailable.
+
+A foreground service is not a background-activity-launch exemption on Android
+14+, so the platform may refuse the `ACTION_ASSIST` launch while the app is not
+visible. The runner records the measured latency and any failure; the persistent
+notification's content intent is the one-tap fallback. Instrumentation grants
+the test process BAL privileges, so the emulator accepts the launch; a stock
+device may not. See the placeholder block in
+[`docs/TESTING.md`](../docs/TESTING.md#placeholder-real-device-bal-verification)
+for the real-device check.
 
 Run the JVM tests with:
 
 ```sh
 cd android
-./gradlew :wakeword:test
+./gradlew :app:call:testDebugUnitTest :wakeword:test :app:testDebugUnitTest
 ```
 
 The instrumentation tests cover the model fixtures, permission denial,
-push-to-talk and a long battery run:
+push-to-talk, service-owned detection and launch, call suspend/resume, disabling
+and a long continuous-listening soak:
 
 ```sh
 cd android
 ./gradlew :app:assembleDebugAndroidTest
-./gradlew :app:connectedDebugAndroidTest
+adb shell am instrument -w \
+  -e class com.example.hermestalk.persistent.AssistantWakeWordServiceTest \
+  com.example.hermestalk.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The battery test is annotated `@LargeTest` and defaults to 60 minutes; override
-the window with `-e wakeWordBatteryMinutes 60`. It writes `usage.json` to the app
-files directory and logs the summary under the `WakeWordUsage` tag. See
+The service soak test is annotated `@LargeTest` and defaults to 1800 s; override
+the window with `-e wakeWordSoakSeconds <seconds>`. It writes `usage.json` to the
+app files directory and logs the summary under the `WakeWordUsage` tag. The
+`:wakeword` module also keeps its 60-minute `WakeWordBatteryTest`, overridable
+with `-e wakeWordBatteryMinutes 60`. See
 [`wakeword/README.md`](wakeword/README.md) for the model provenance, tuning,
 sensitivity presets and the false-trigger log.
 

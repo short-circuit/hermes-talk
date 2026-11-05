@@ -48,6 +48,8 @@ import com.example.hermestalk.AssistantRoleState
 import com.example.hermestalk.FingerprintState
 import com.example.hermestalk.R
 import com.example.hermestalk.call.AssistantForegroundType
+import com.example.hermestalk.call.AssistantMicOwner
+import com.example.hermestalk.call.AssistantWakeWordState
 import com.example.hermestalk.call.PersistentAssistantState
 import com.example.hermestalk.rtvi.ConnectionState
 import com.example.hermestalk.rtvi.FailureReason
@@ -78,6 +80,9 @@ fun SettingsScreen(
     persistentState: PersistentAssistantState = PersistentAssistantState(),
     onPersistentEnabledChange: (Boolean) -> Unit = {},
     onRequestBatteryExemption: () -> Unit = {},
+    wakeWordAssistant: AssistantWakeWordState = AssistantWakeWordState(),
+    wakeWordEnabled: Boolean = false,
+    onWakeWordEnabledChange: (Boolean) -> Unit = {},
 ) {
     var relayUrl by rememberSaveable(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
     var token by rememberSaveable(uiState.deviceToken) { mutableStateOf(uiState.deviceToken) }
@@ -492,6 +497,63 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("settings_persistent_status"),
                     )
+                    if (persistentEnabled) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.settings_wake_word_toggle),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_wake_word_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = wakeWordEnabled,
+                                onCheckedChange = onWakeWordEnabledChange,
+                                modifier = Modifier.testTag("settings_wake_word_toggle"),
+                            )
+                        }
+                        val wakeWordStatus = when {
+                            !wakeWordEnabled ->
+                                stringResource(R.string.settings_wake_word_status_disabled)
+
+                            wakeWordAssistant.lastFailure != null -> stringResource(
+                                R.string.settings_wake_word_status_failed,
+                                wakeWordAssistant.lastFailure.orEmpty(),
+                            )
+
+                            wakeWordAssistant.listening ->
+                                stringResource(R.string.settings_wake_word_status_listening)
+
+                            wakeWordAssistant.micOwner == AssistantMicOwner.Call ->
+                                stringResource(R.string.settings_wake_word_status_call)
+
+                            else -> stringResource(R.string.settings_wake_word_status_off)
+                        }
+                        Text(
+                            text = wakeWordStatus,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.testTag("settings_wake_word_status"),
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.settings_wake_word_counts,
+                                wakeWordAssistant.detectionCount,
+                                wakeWordAssistant.falseTriggerCount,
+                                wakeWordAssistant.lastLaunchLatencyMillis,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("settings_wake_word_counts"),
+                        )
+                    }
                     if (persistentState.micRefusal != null) {
                         Column(
                             modifier = Modifier.testTag("settings_persistent_mic_refused"),
