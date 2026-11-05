@@ -10,6 +10,7 @@ import ai.pipecat.client.types.Value
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,7 @@ class RtviSession(
     context: Context,
     private val probe: HealthProbe = HttpHealthProbe(),
     private val callbacks: SessionCallbacks = SessionCallbacks.None,
+    private val audioSource: CallAudioSource = CallAudioSources.current(),
 ) {
 
     private val appContext = context.applicationContext
@@ -51,6 +53,8 @@ class RtviSession(
     private var retryAttempt = 0
     private var micEnabled = true
     private var sessionGeneration = 0
+    private var audioSeq = 0
+    private var feedingAudio = false
     private val watchdog = SessionWatchdog()
     private var watchdogJob: Job? = null
     private var watchdogEndpoint: RelayEndpoint? = null
@@ -94,6 +98,7 @@ class RtviSession(
         sessionGeneration++
         cancelRetryInternal()
         stopWatchdogInternal()
+        stopScriptedAudio()
         watchdogEndpoint = null
         watchdogSettings = null
         retryAttempt = 0
@@ -116,6 +121,7 @@ class RtviSession(
         sessionGeneration++
         cancelRetryInternal()
         stopWatchdogInternal()
+        stopScriptedAudio()
         watchdogEndpoint = null
         watchdogSettings = null
         retryAttempt = 0
@@ -127,10 +133,17 @@ class RtviSession(
     /**
      * Enable or disable the microphone. The SDK exposes `enableMic`; the flag is
      * also retained so a client created later starts with the requested value.
+     *
+     * A scripted source never touches the SDK microphone: the flag gates the
+     * frames the session forwards instead, so muting still stops the audio the
+     * relay hears.
      */
     fun updateMic(enabled: Boolean) {
         micEnabled = enabled
         val activeClient = client ?: return
+        if (audioSource.scripted) {
+            return
+        }
         try {
             activeClient.enableMic(enabled)
         } catch (error: Exception) {
@@ -278,6 +291,10 @@ class RtviSession(
             val transport = SmallWebRTCTransport(appContext)
             val options = PipecatClientOptions(
                 callbacks = pipecatCallbacks,
+                // The microphone track stays in the offer even for a scripted
+                // source: the relay answers the offer and needs an audio m-line.
+                // A scripted session declares its source and the relay ignores
+                // the RTP track in favour of the frames sent over the channel.
                 enableMic = micEnabled,
                 enableCam = false,
             )
@@ -306,7 +323,19 @@ class RtviSession(
         }
 
         _state.value = transition.state
+        CallTrace.record(
+            "call.state",
+            mapOf("state" to transition.state::class.simpleName.orEmpty()),
+        )
         callbacks.onStateChanged(transition.state)
+        when (transition.state) {
+            is ConnectionState.Ready -> startScriptedAudio()
+            is ConnectionState.Failed,
+            is ConnectionState.Disconnected,
+            -> stopScriptedAudio()
+
+            else -> Unit
+        }
         syncWatchdog(transition.state)
         if (transition.state is ConnectionState.Failed) {
             releaseClientInternal()
@@ -319,6 +348,79 @@ class RtviSession(
             }
         }
         return transition
+    }
+
+    /**
+     * Start the scripted audio source. Only a scripted source produces frames;
+     * the device microphone is captured by the WebRTC transport itself.
+     */
+    private fun startScriptedAudio() {
+        if (!audioSource.scripted || feedingAudio) {
+            return
+        }
+        feedingAudio = true
+        audioSeq = 0
+        declareAudioSource()
+        val started = audioSource.start { frame ->
+            mainHandler.post { sendAudioFrame(frame) }
+        }
+        if (started) {
+            callbacks.onLog("scripted audio started: ${audioSource.describe()}")
+        } else {
+            feedingAudio = false
+        }
+    }
+
+    /**
+     * Tell the relay that the microphone is scripted so it ignores the silent
+     * RTP track and reads the frames sent over the data channel instead.
+     */
+    private fun declareAudioSource() {
+        val activeClient = client ?: return
+        try {
+            activeClient.sendClientMessage(
+                AUDIO_SOURCE_TYPE,
+                Value.Object(mapOf("scripted" to Value.Bool(true))),
+            )
+        } catch (error: Exception) {
+            callbacks.onLog("audio source declaration failed: ${error.message}")
+        }
+    }
+
+    private fun stopScriptedAudio() {
+        if (!feedingAudio) {
+            return
+        }
+        feedingAudio = false
+        audioSource.stop()
+        callbacks.onLog("scripted audio stopped")
+    }
+
+    /**
+     * Forward one microphone frame to the relay as an RTVI client message.
+     * Frames are dropped while the user is muted so the relay hears silence.
+     */
+    private fun sendAudioFrame(frame: ByteArray) {
+        val activeClient = client ?: return
+        if (!micEnabled || !feedingAudio) {
+            return
+        }
+        val encoded = Base64.encodeToString(frame, Base64.NO_WRAP)
+        try {
+            activeClient.sendClientMessage(
+                AUDIO_FRAME_TYPE,
+                Value.Object(
+                    mapOf(
+                        "pcm" to Value.Str(encoded),
+                        "sample_rate" to Value.Number(audioSource.sampleRateHz.toDouble()),
+                        "seq" to Value.Number(audioSeq.toDouble()),
+                    ),
+                ),
+            )
+            audioSeq += 1
+        } catch (error: Exception) {
+            callbacks.onLog("audio frame send failed: ${error.message}")
+        }
     }
 
     private fun scheduleRetryInternal() {
@@ -437,5 +539,11 @@ class RtviSession(
 
     private companion object {
         val RETRY_DELAYS_MS = longArrayOf(2000L, 5000L, 10000L)
+
+        /** RTVI client-message type carrying one scripted microphone frame. */
+        const val AUDIO_FRAME_TYPE = "audio-frame"
+
+        /** RTVI client-message type declaring that the microphone is scripted. */
+        const val AUDIO_SOURCE_TYPE = "audio-source"
     }
 }

@@ -23,6 +23,8 @@ outbound track, and forwards RTVI envelopes over the ``chat`` data channel.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import importlib.util
 import inspect
 import json
@@ -58,6 +60,15 @@ _BYTES_PER_SAMPLE = 2
 _MIC_QUEUE_MAX = 64
 _ICE_GATHER_TIMEOUT_S = 2.0
 _RTVI_VERSION = "2.0.0"
+# A scripted client sends its microphone audio as base64 PCM16 over the data
+# channel, because the emulator microphone cannot be driven from a test.  The
+# relay decodes it into the same PcmChunk queue the WebRTC track feeds, so VAD,
+# endpointing, and STT stay on the production path.
+_CLIENT_MESSAGE_TYPE = "client-message"
+_CLIENT_AUDIO_FRAME_TYPE = "audio-frame"
+_CLIENT_AUDIO_SOURCE_TYPE = "audio-source"
+_SERVER_MESSAGE_TYPE = "server-message"
+_AUDIO_STATS_TYPE = "bot-audio-stats"
 _REQUIRED_MODULES = ("aiortc", "av", "numpy")
 
 _TRACK_CLASS: Any | None = None
@@ -155,6 +166,9 @@ def _outbound_track_class() -> Any:
             self._pending = bytearray()
             self._pts = 0
             self._closed = False
+            # PCM16 bytes of decoded TTS audio handed to the peer connection
+            # since the last time the session reported a TTS statistic.
+            self._tts_pcm_bytes = 0
 
         def push_chunk(self, chunk: AudioChunk) -> None:
             """Decode one Opus chunk into the outbound PCM buffer."""
@@ -171,9 +185,23 @@ def _outbound_track_class() -> Any:
                     continue
                 for frame in frames:
                     for resampled in self._resampler.resample(frame):
-                        self._pending.extend(
-                            bytes(resampled.planes[0])[: resampled.samples * _BYTES_PER_SAMPLE]
-                        )
+                        pcm = bytes(resampled.planes[0])[: resampled.samples * _BYTES_PER_SAMPLE]
+                        self._pending.extend(pcm)
+                        self._tts_pcm_bytes += len(pcm)
+
+        def take_audio_stats(self) -> dict[str, Any] | None:
+            """Return and reset the TTS audio handed to the peer since the last call."""
+            if self._tts_pcm_bytes <= 0:
+                return None
+            audio_bytes = self._tts_pcm_bytes
+            self._tts_pcm_bytes = 0
+            return {
+                "audio_bytes": audio_bytes,
+                "sample_rate": _OUTBOUND_SAMPLE_RATE,
+                "audio_ms": round(
+                    audio_bytes / _BYTES_PER_SAMPLE / _OUTBOUND_SAMPLE_RATE * 1000.0, 1
+                ),
+            }
 
         def clear(self) -> None:
             """Drop buffered audio immediately for barge-in."""
@@ -302,10 +330,20 @@ class RtviSession:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._bot_ready_sent = False
         self._closed = False
+        # Bytes of scripted microphone audio accepted over the data channel.
+        self._client_audio_bytes = 0
+        # True once the client declares that its microphone is scripted; the
+        # RTP track is then ignored in favour of the data-channel frames.
+        self._scripted_audio = False
 
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def client_audio_bytes(self) -> int:
+        """Bytes of scripted microphone audio accepted over the data channel."""
+        return self._client_audio_bytes
 
     async def offer(self, sdp: str, offer_type: str) -> dict[str, str]:
         """Create the peer connection and return the SDP answer."""
@@ -435,6 +473,36 @@ class RtviSession:
 
     def send_message(self, message: Mapping[str, Any]) -> None:
         """Send one RTVI envelope; never raise out of a send."""
+        self._send_envelope(message)
+        if dict(message).get("type") == "bot-tts-stopped":
+            self._send_audio_stats()
+
+    def _send_audio_stats(self) -> None:
+        """Report how much TTS audio was pushed for the utterance that just ended."""
+        track = self._track
+        take = getattr(track, "take_audio_stats", None)
+        if not callable(take):
+            return
+        stats = take()
+        if stats is None:
+            return
+        self._send_envelope(
+            {
+                "label": "rtvi",
+                "type": _SERVER_MESSAGE_TYPE,
+                # Both key sets are sent: Pipecat clients parse custom server
+                # messages either as {"t","d"} (compact) or {"type","data"}.
+                "data": {
+                    "t": _AUDIO_STATS_TYPE,
+                    "d": stats,
+                    "type": _AUDIO_STATS_TYPE,
+                    "data": stats,
+                },
+            }
+        )
+
+    def _send_envelope(self, message: Mapping[str, Any]) -> None:
+        """Write one envelope to the data channel, tolerating a closed channel."""
         channel = self._channel
         if channel is None:
             return
@@ -486,14 +554,32 @@ class RtviSession:
         if not isinstance(payload, dict):
             return
         message_type = payload.get("type")
-        if message_type == "client-ready":
+        body = payload.get("data")
+        if not isinstance(body, Mapping):
+            body = payload
+        _LOGGER.info(
+            "rtvi.message_received %s",
+            text[:80],
+            extra={"event": "rtvi.message_received", "session_id": self.session_id},
+        )
+        # Route by payload content: the Pipecat client wraps custom messages as
+        # {"type":"client-message","data":{"t":..,"d":..}} in 1.2.x and as
+        # {"type":"client-message","data":{"type":..,"data":..}} elsewhere, so
+        # the inner body is what identifies the message, not the envelope.
+        inner = body.get("data", body.get("d"))
+        if isinstance(inner, Mapping) and isinstance(inner.get("pcm"), str):
+            self._handle_client_audio_frame(inner)
+        elif isinstance(inner, Mapping) and "scripted" in inner:
+            self._handle_client_audio_source(inner)
+        elif message_type == "client-ready":
             _LOGGER.info(
                 "rtvi.client_ready",
                 extra={"event": "rtvi.client_ready", "session_id": self.session_id},
             )
         else:
             _LOGGER.info(
-                "rtvi.message_ignored",
+                "rtvi.message_ignored %s",
+                text[:160],
                 extra={
                     "event": "rtvi.message_ignored",
                     "session_id": self.session_id,
@@ -501,12 +587,72 @@ class RtviSession:
                 },
             )
 
+    def _handle_client_audio_source(self, body: Mapping[str, Any]) -> None:
+        """Record that the client's microphone is scripted."""
+        self._scripted_audio = bool(body.get("scripted"))
+        _LOGGER.info(
+            "rtvi.audio_source_declared",
+            extra={
+                "event": "rtvi.audio_source_declared",
+                "session_id": self.session_id,
+                "scripted": self._scripted_audio,
+            },
+        )
+
+    def _handle_client_audio_frame(self, body: Mapping[str, Any]) -> None:
+        """Decode one scripted microphone frame and queue it for the call loop."""
+        encoded = body.get("pcm")
+        if not isinstance(encoded, str) or not encoded:
+            return
+        try:
+            rate = int(body.get("sample_rate", _INBOUND_SAMPLE_RATE))
+        except (TypeError, ValueError):
+            rate = 0
+        if rate != _INBOUND_SAMPLE_RATE:
+            _LOGGER.info(
+                "rtvi.audio_frame_rate_rejected",
+                extra={
+                    "event": "rtvi.audio_frame_rate_rejected",
+                    "session_id": self.session_id,
+                    "sample_rate": rate,
+                },
+            )
+            return
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raw = b""
+        chunk = PcmChunk(data=raw, sample_rate=_INBOUND_SAMPLE_RATE)
+        try:
+            chunk.validate()
+        except ValueError:
+            _LOGGER.info(
+                "rtvi.audio_frame_invalid",
+                extra={"event": "rtvi.audio_frame_invalid", "session_id": self.session_id},
+            )
+            return
+        self._client_audio_bytes += len(raw)
+        _LOGGER.info(
+            "rtvi.audio_frame_accepted",
+            extra={
+                "event": "rtvi.audio_frame_accepted",
+                "session_id": self.session_id,
+                "bytes": len(raw),
+                "total": self._client_audio_bytes,
+            },
+        )
+        self._enqueue_mic(chunk)
+
     async def _consume_track(self, track: Any) -> None:
         aiortc = _import_aiortc()
         error_type = aiortc.mediastreams.MediaStreamError
         try:
             while not self._closed:
                 frame = await track.recv()
+                if self._scripted_audio:
+                    # The client sends its microphone over the data channel;
+                    # keep draining the track so the transport stays healthy.
+                    continue
                 converter = self._inbound
                 if converter is None:
                     continue

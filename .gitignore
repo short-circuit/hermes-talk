@@ -40,6 +40,8 @@ models/
 
 # Synthetic attachment fixtures are tiny, generated, and committed on purpose.
 !relay/tests/fixtures/attachments/*.wav
+# The scripted-microphone E2E utterance is synthetic Kokoro speech (~90 KB).
+!android/app/src/androidTest/assets/e2e/*.wav
 
 # Local state
 .hermes/

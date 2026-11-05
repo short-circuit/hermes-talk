@@ -11,6 +11,21 @@ interface SessionCallbacks {
     /** Called with a bot transcript fragment. */
     fun onBotTranscript(text: String) {}
 
+    /** Called with the relay's transcript of the user's speech. */
+    fun onUserTranscript(text: String, isFinal: Boolean) {}
+
+    /** Called with the text the brain decided to speak. */
+    fun onBotLlmText(text: String) {}
+
+    /** Called when the relay starts synthesising speech. */
+    fun onBotTtsStarted() {}
+
+    /** Called when the relay stops synthesising speech. */
+    fun onBotTtsStopped() {}
+
+    /** Called with the amount of speech audio the relay pushed for the last utterance. */
+    fun onBotAudioStats(audioBytes: Long, audioMs: Double) {}
+
     /** Called with a local microphone level in the range 0..1. */
     fun onUserAudioLevel(level: Float) {}
 

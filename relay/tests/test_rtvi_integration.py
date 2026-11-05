@@ -9,6 +9,7 @@ are loaded.  The relay's own audio bridge and outbound Opus track are real.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 import time
@@ -98,19 +99,24 @@ def _decision(tool: str, spoken: str, arguments: Mapping[str, Any] | None = None
 class _ScriptedSttSession:
     """Emit one final transcript after a fixed number of microphone chunks."""
 
-    def __init__(self, text: str, after_chunks: int) -> None:
+    def __init__(self, text: str, after_chunks: int, *, loud_only: bool = False) -> None:
         self._text = text
         self._after = after_chunks
+        self._loud_only = loud_only
         self._seen = 0
         self._emitted = False
         self.peak = 0
         self.closed = False
 
     async def feed(self, chunk: PcmChunk) -> tuple[TranscriptEvent, ...]:
-        self._seen += 1
         samples = np.frombuffer(chunk.data, dtype=np.int16)
-        if samples.size:
-            self.peak = max(self.peak, int(np.max(np.abs(samples.astype(np.int32)))))
+        peak = int(np.max(np.abs(samples.astype(np.int32)))) if samples.size else 0
+        self.peak = max(self.peak, peak)
+        # A silent chunk from the (unused) microphone track must not count
+        # towards the threshold when the test drives audio over the data channel.
+        if self._loud_only and peak == 0:
+            return ()
+        self._seen += 1
         if self._emitted or self._seen < self._after:
             return ()
         self._emitted = True
@@ -134,16 +140,17 @@ class _ScriptedSttSession:
 class _ScriptedSttAdapter:
     name = "scripted"
 
-    def __init__(self, text: str, after_chunks: int = 3) -> None:
+    def __init__(self, text: str, after_chunks: int = 3, *, loud_only: bool = False) -> None:
         self._text = text
         self._after = after_chunks
+        self._loud_only = loud_only
         self.sessions: list[_ScriptedSttSession] = []
 
     def describe(self) -> dict[str, object]:
         return {"engine": "scripted", "streaming": True}
 
     async def start_session(self) -> _ScriptedSttSession:
-        session = _ScriptedSttSession(self._text, self._after)
+        session = _ScriptedSttSession(self._text, self._after, loud_only=self._loud_only)
         self.sessions.append(session)
         return session
 
@@ -578,6 +585,17 @@ def _find(messages: list[dict[str, Any]], message_type: str) -> list[dict[str, A
     return [message for message in messages if message.get("type") == message_type]
 
 
+def _audio_stats(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the data payloads of bot-audio-stats server messages."""
+    return [
+        message["data"]["data"]
+        for message in _find(messages, "server-message")
+        if isinstance(message.get("data"), dict)
+        and message["data"].get("type") == "bot-audio-stats"
+        and isinstance(message["data"].get("data"), dict)
+    ]
+
+
 def _scenario_completed(hermes: _FakeHermes, run_id: str) -> AsyncIterator[RunEvent]:
     async def _stream() -> AsyncIterator[RunEvent]:
         yield _event(
@@ -910,6 +928,148 @@ def test_rtvi_call_cap_warns_and_closes_the_session() -> None:
                 description="call-cap session close",
             )
             assert "Time's up. Goodbye." in harness.texts
+        finally:
+            await call.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        harness.stop()
+
+
+def _audio_frame_message(pcm: bytes, seq: int) -> str:
+    """Build the envelope Pipecat's Android client sends for one scripted frame.
+
+    The client serialises custom messages as
+    ``{"label":"rtvi-ai","type":"client-message","data":{"t":...,"d":...}}``.
+    """
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "label": "rtvi-ai",
+            "type": "client-message",
+            "data": {
+                "t": "audio-frame",
+                "d": {
+                    "pcm": base64.b64encode(pcm).decode("ascii"),
+                    "sample_rate": 16000,
+                    "seq": seq,
+                },
+            },
+        }
+    )
+
+
+def _audio_source_message() -> str:
+    """Build the declaration that the client's microphone is scripted."""
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "label": "rtvi-ai",
+            "type": "client-message",
+            "data": {"t": "audio-source", "d": {"scripted": True}},
+        }
+    )
+
+
+def test_rtvi_scripted_audio_frames_feed_the_mic_path_and_report_tts_bytes() -> None:
+    """A client-message audio frame reaches STT and the TTS byte count comes back."""
+    messages: list[dict[str, Any]] = []
+    audio: list[bool] = []
+    harness = _RelayHarness(
+        router=_ScriptedRouter(_decision("answer_direct", "It is four o'clock.")),
+        stt=_ScriptedSttAdapter("what time is it", after_chunks=3, loud_only=True),
+        hermes=_FakeHermes(),
+    )
+    harness.start()
+
+    frame_samples = 16000 * 20 // 1000
+    tone = np.arange(frame_samples) / 16000.0
+    frame = (6000.0 * np.sin(2.0 * np.pi * 220.0 * tone)).astype(np.int16).tobytes()
+    frames = 6
+
+    async def scenario() -> None:
+        call = _Call(harness.base_url, messages, audio)
+        try:
+            await call.open()
+            call.channel.send(_audio_source_message())
+            for seq in range(frames):
+                call.channel.send(_audio_frame_message(frame, seq))
+                await asyncio.sleep(0.02)
+
+            await _wait_for(
+                lambda: any(
+                    message.get("type") == "user-transcription"
+                    and message.get("data", {}).get("final") is True
+                    for message in messages
+                ),
+                timeout_s=_MAX_WAIT_S,
+                description="final transcript from scripted audio",
+            )
+            await _wait_for(
+                lambda: bool(_find(messages, "bot-tts-stopped")),
+                timeout_s=_MAX_WAIT_S,
+                description="bot-tts-stopped",
+            )
+            await _wait_for(
+                lambda: bool(_audio_stats(messages)),
+                timeout_s=_MAX_WAIT_S,
+                description="bot-audio-stats",
+            )
+
+            transcripts = [
+                message["data"]
+                for message in _find(messages, "user-transcription")
+                if message.get("data", {}).get("final") is True
+            ]
+            assert transcripts[0]["text"] == "what time is it"
+
+            stats = _audio_stats(messages)
+            assert stats, "the relay must report the TTS audio it pushed"
+            assert stats[0]["audio_bytes"] > 0
+            assert stats[0]["sample_rate"] == 48000
+            assert stats[0]["audio_ms"] > 0
+            assert "It is four o'clock." in harness.texts
+
+            session = harness.manager.get_session(call.session_id)
+            assert session is not None
+            assert session.client_audio_bytes == frames * len(frame)
+
+            await call.delete()
+        finally:
+            await call.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        harness.stop()
+
+
+def test_rtvi_scripted_audio_frame_with_a_bad_rate_is_ignored() -> None:
+    """A frame at another sample rate never reaches the microphone queue."""
+    messages: list[dict[str, Any]] = []
+    audio: list[bool] = []
+    harness = _RelayHarness(
+        router=_ScriptedRouter(_decision("answer_direct", "OK.")),
+        stt=_ScriptedSttAdapter("hello", after_chunks=1, loud_only=True),
+        hermes=_FakeHermes(),
+    )
+    harness.start()
+
+    async def scenario() -> None:
+        call = _Call(harness.base_url, messages, audio)
+        try:
+            await call.open()
+            envelope = json.loads(_audio_frame_message(b"\x01\x02" * 320, 0))
+            envelope["data"]["d"]["sample_rate"] = 48000
+            call.channel.send(json.dumps(envelope))
+            await asyncio.sleep(0.3)
+
+            session = harness.manager.get_session(call.session_id)
+            assert session is not None
+            assert session.client_audio_bytes == 0
+            assert not _find(messages, "user-transcription")
+            await call.delete()
         finally:
             await call.close()
 
