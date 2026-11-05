@@ -1093,6 +1093,17 @@ class TurnController:
         self._active = record
         return record
 
+    def bind_run(self, run_id: str) -> TurnRecord:
+        """Attach a run id to a THINKING turn: THINKING -> SPEAKING."""
+        if not isinstance(run_id, str) or not run_id.strip():
+            msg = "run_id must be a non-empty string"
+            raise TurnConfigError(msg)
+        record = self._require_active()
+        self._require_state(record, frozenset({TurnState.THINKING}))
+        record = self._ledger.transition(record, TurnState.SPEAKING, run_id=run_id.strip())
+        self._active = record
+        return record
+
     def note_spoken(self, text: str) -> None:
         """Record spoken text for the bounded interruption marker tail."""
         normalized = _sanitize_spoken(str(text))

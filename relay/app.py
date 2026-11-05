@@ -50,6 +50,8 @@ from relay.logging import (
 )
 from relay.storage.inbox import InboxConfigError, InboxError, InboxStore
 from relay.storage.outbox import OutboxConfigError, OutboxError, OutboxStore
+from relay.transport.rtvi import RtviSessionManager
+from relay.transport.rtvi import router as rtvi_router
 
 _CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SERVICE_NAME = "voice-relay"
@@ -177,11 +179,17 @@ def _limits_check(limits: AdmissionController) -> dict[str, Any]:
     return {"name": "limits", "ok": True, "detail": detail}
 
 
+def _rtvi_check(rtvi: RtviSessionManager) -> dict[str, Any]:
+    available, detail = rtvi.availability()
+    return {"name": "rtvi", "ok": available, "detail": detail}
+
+
 def _readiness_checks(
     settings: Settings,
     store: TokenStore,
     shutting_down: bool,
     limits: AdmissionController | None = None,
+    rtvi: RtviSessionManager | None = None,
 ) -> list[dict[str, Any]]:
     shutdown_check: dict[str, Any] = {
         "name": "shutdown",
@@ -197,6 +205,8 @@ def _readiness_checks(
     ]
     if limits is not None:
         checks.append(_limits_check(limits))
+    if rtvi is not None:
+        checks.append(_rtvi_check(rtvi))
     return checks
 
 
@@ -276,6 +286,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with suppress(asyncio.CancelledError):
                 await reaper_task
             reaper_task = None
+        rtvi: RtviSessionManager = app.state.rtvi
+        await rtvi.close_all(reason="shutdown")
         closed_sessions = await limits.close_all(reason="shutdown")
         for session_id in closed_sessions:
             _logger.info(
@@ -325,6 +337,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     app.state.token_store = token_store
     app.state.limits = build_limits(resolved_settings)
+    app.state.rtvi = RtviSessionManager(app, resolved_settings, app.state.limits)
     try:
         app.state.inbox = InboxStore(resolved_settings)
     except InboxConfigError:
@@ -489,6 +502,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(attach_router)
     app.include_router(files_router)
+    app.include_router(rtvi_router)
 
     @app.get("/")
     async def root() -> dict[str, str]:
@@ -523,6 +537,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.app.state.token_store,
             bool(request.app.state.shutting_down),
             request.app.state.limits,
+            request.app.state.rtvi,
         )
         all_ok = all(check["ok"] for check in checks)
         payload = {

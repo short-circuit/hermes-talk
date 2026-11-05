@@ -658,6 +658,11 @@ class VoiceBrainRouter:
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
 
+    @classmethod
+    def from_settings(cls, settings: Any, **overrides: Any) -> VoiceBrainRouter:
+        """Build a router from relay settings without issuing a request."""
+        return cls(RouterConfig.from_settings(settings), **overrides)
+
     async def aclose(self) -> None:
         """Close the shared HTTP client, if one was created."""
         if self._client is not None:

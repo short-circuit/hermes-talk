@@ -4,10 +4,12 @@ Local-only, hands-free voice control plane for [Hermes Agent](https://github.com
 Talk to your agent from an Android phone, interrupt it mid-answer, approve or deny tool calls by voice,
 and send files in either direction — with no cloud speech, LLM, or TTS dependency at runtime.
 
-**Status:** v0.1.0, pre-alpha. Shipped: the relay's probe and file-transfer surface, the Hermes run
-adapter, the spoken approval gate, the Android client and its instrumentation suite. Not shipped yet:
-the call loop that wires transport, speech, brain and Hermes into the relay app (those modules are
-libraries today). See `docs/RELEASE.md` for what v0.1.0 contains and `docs/ROADMAP.md` for the phases.
+**Status:** v0.1.1, pre-alpha. Shipped: the relay's probe and file-transfer surface, the RTVI call loop
+(WebRTC signalling and audio bridge, VAD/STT, voice brain, Hermes delegation, TTS, barge-in, spoken
+approval and `MAX_CALL_MINUTES`), the Android client and its instrumentation suite. The Android
+Connected/Ready path is still proven against `android/stub-relay`; an in-process `aiortc` client
+exercises the production relay loop in the test suite. See `docs/RELEASE.md` for what v0.1.1 contains
+and `docs/ROADMAP.md` for the phases.
 
 ## Why
 

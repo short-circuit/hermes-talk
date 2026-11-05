@@ -1,18 +1,18 @@
 # Relay API reference
 
-**Scope.** Every HTTP and RTVI/WebSocket surface this repository exposes today, the auth scheme, the
-error catalogue, and the admission limits behind it. It describes relay `0.1.0` (pre-alpha) as shipped
-at commit `adbda00`; the API surface has not changed since, and every example was re-run against that
-tree. Where a surface is shipped but not mounted on the production app, that is stated explicitly — an
-endpoint listed here is never a plan, only code that answers a request.
+**Scope.** Every HTTP and RTVI/WebRTC surface this repository exposes today, the auth scheme, the
+error catalogue, and the admission limits behind it. It describes relay `0.1.0` (pre-alpha) plus the
+RTVI call loop in `relay/transport/rtvi.py` and `relay/transport/call_loop.py`. Where a surface is
+shipped but not mounted on the production app, that is stated explicitly — an endpoint listed here is
+never a plan, only code that answers a request.
 
 **Audience.** An Android client developer, an operator debugging a rejection, or a contributor adding
 a route. The upstream Hermes gateway contract (runs, SSE frames, sessions) lives in
 [`research/hermes-api.md`](research/hermes-api.md); this document covers the relay's own surface.
 
 **Local-only.** No endpoint in this reference calls a cloud STT, TTS or LLM. The relay process makes
-no outbound request while serving any route below; model servers and the Hermes gateway are reached
-only by library code that the call loop will mount later.
+no outbound request while serving the HTTP routes below; the RTVI call loop reaches only the configured
+local model servers and the loopback Hermes gateway through `relay/hermes/client.py`.
 
 ## How every example here was produced
 
@@ -556,11 +556,13 @@ HTTP 200
 ## 3. Routes that are not mounted yet
 
 - `POST /v1/runs` — reserved in `relay/limits.py::RATE_LIMIT_ROUTES` with the `run` rate-limit
-  category and the run-lease capacity. The call loop will mount it; until then a request to it is a
-  framework 404.
+  category and the run-lease capacity. The production relay's call loop talks to the gateway's
+  `/v1/runs` directly through `relay/hermes/client.py`; the relay app itself does not mount that
+  route, so a request to it on the relay is a framework 404.
 - No SSE endpoint and no WebSocket endpoint on the production app. The relay consumes the gateway's
-  SSE stream as a client (`relay/hermes/client.py`) and emits normalized events internally (§6). The
-  RTVI/WebSocket surface in §5 is served today by the stub fixture only.
+  SSE stream as a client (`relay/hermes/client.py`) and emits normalized events internally (§6). RTVI
+  calls are served by the production relay through HTTP signalling plus a WebRTC data channel (§7);
+  `android/stub-relay/relay.py` remains the fixture used by the Android instrumentation tests.
 
 ## 4. Error catalogue
 
@@ -618,8 +620,8 @@ HTTP 404
 HTTP 405
 ```
 
-`reconnect_budget_exhausted` and the run/session limits are raised by the admission controller, not by
-an HTTP route today; they appear on the wire as soon as `POST /v1/runs` and the call loop are mounted.
+`reconnect_budget_exhausted` and the run limits are raised by the admission controller, not by an HTTP
+route today; the session limit is on the wire through RTVI `POST /start` (503 `session_limit_reached`).
 `attachment_not_found` and `attachment_changed` come from the inbox retrieval paths
 (`InboxStore.resolve`/`InboxStore.delegation_parts`), which no mounted route calls yet; uploads cannot
 produce them.
@@ -649,7 +651,7 @@ global run cap, `MAX_QUEUED_UPLOADS < 1`).
 | `SSE_MAX_RECONNECT_ATTEMPTS` | 5 | reconnects per session before 429 `reconnect_budget_exhausted` |
 | `BARGE_IN_MIN_SPEECH_MS` / `BARGE_IN_COOLDOWN_MS` | 300 / 1000 | interruption debounce |
 | `OUTBOX_RETENTION_DAYS` | 0 | artifact expiry; 0 disables |
-| `MAX_CALL_MINUTES` | 60 | call-length cap reserved for the call loop; nothing in this tree enforces it yet |
+| `MAX_CALL_MINUTES` | 60 | call-length cap enforced by `relay/transport/call_loop.py`: warning, then goodbye and session close |
 
 Mechanics: one token bucket per `(token_id, category)`, capacity `burst`, refill
 `per_minute / 60` per second, keyed by the public 8-hex token id (never the token). A bucket that has
@@ -732,13 +734,20 @@ foreign `run_id` is a contract violation. Unknown event names are surfaced as `u
 breaking the stream. The raw upstream frame schema is in
 [`research/hermes-api.md`](research/hermes-api.md) §4.
 
-## 7. RTVI signalling and data-channel surface (stub fixture)
+## 7. RTVI signalling and data-channel surface
 
-`android/stub-relay/relay.py` is the only process in this repository that answers the RTVI/WebRTC
-signalling contract today. It is a fixture: no STT, TTS or LLM. The production relay does not mount
-these routes yet.
+The production relay serves the RTVI/WebRTC call surface through `relay/transport/rtvi.py`; it mirrors
+the contract that `android/stub-relay/relay.py` implements. The production path adds admission control,
+speech, the voice-brain router, Hermes delegation, barge-in, the spoken approval gate and the call cap.
+The stub fixture remains in the tree and is still what the Android instrumentation tests drive; it has
+no STT, TTS or LLM.
 
-Start it (loopback, optional bearer token, tone off):
+The WebRTC dependencies are an optional extra. Install them with `./relay[webrtc]` (`aiortc`, `av`,
+`numpy`). Without the extra the relay still boots and reports `rtvi` as not ok on `/ready`; the RTVI
+routes answer 503 `{"error":"rtvi_unavailable"}`. With the extra installed, `/ready` reports the
+`rtvi` check as ok.
+
+The fixture can still be started for Android work (loopback, optional bearer token, tone off):
 
 ```sh
 .venv/bin/python android/stub-relay/relay.py --host 127.0.0.1 --port 8765 \
@@ -754,19 +763,39 @@ Start it (loopback, optional bearer token, tone off):
 
 ### 7.1 Signalling endpoints
 
+The production relay mounts these routes. `GET /health` and `GET /ready` are the probes documented in
+§2; the RTVI routes are below.
+
 | Method | Path | Auth | Success body |
 |---|---|---|---|
-| `GET` | `/health` | no | `{"status": "ok"}` |
-| `GET` | `/ready` | no | `{"status": "ready"}` |
 | `POST` | `/start` | bearer | `{"sessionId": "<uuid4>", "iceConfig": {"iceServers": []}}` |
 | `POST` | `/sessions/{id}/api/offer` | bearer | `{"sdp": "<answer SDP>", "type": "answer", "pc_id": "<id>"}` |
 | `PATCH` | `/sessions/{id}/api/offer` | bearer | `{"status": "ok"}` |
 | `DELETE` | `/sessions/{id}` | **no** | `{"status": "ok"}` |
 
-Error bodies on this surface are `{"error": "<message>"}`: 401 `{"error":"unauthorized"}`, 404
-`{"error":"not found"}` for an unknown path, 404 `{"error":"unknown session"}` for a stale id, 500
-`{"error":"<exception text>"}` for a malformed offer. `DELETE` is unauthenticated by design in the
-fixture — it only closes a session.
+`POST /start` acquires a session lease from the admission controller and registers a stop hook, so
+the lifespan reaper can close an idle peer connection. Over the concurrent-session cap it answers 503
+`session_limit_reached` with the standard limit envelope (§4). `DELETE` is unauthenticated for contract
+parity with the fixture; it closes the peer connection and releases the lease exactly once.
+
+The offer handler creates an `aiortc` peer connection, adds the outbound 48 kHz audio track, installs
+the `chat` data channel, and waits (bounded at 2 s) for ICE gathering before returning the answer.
+
+Error bodies on this surface are `{"error": "<message>"}`:
+
+| Status | `error` | When |
+|---|---|---|
+| 401 | `unauthorized` | missing or invalid bearer token on `/start`, offer or PATCH |
+| 400 | `invalid_json` / `missing_sdp` / `invalid_type` | malformed offer body |
+| 400 | `invalid_json` / `candidates must be a list` | malformed PATCH body |
+| 404 | `unknown session` | offer or PATCH for an id that is not registered |
+| 500 | `<exception text>` | the peer connection failed to answer the offer |
+| 503 | `rtvi_unavailable` | the `webrtc` extra is not installed |
+| 503 | `session_limit_reached` | the concurrent-session cap is full |
+
+The examples below were produced against the stub fixture on port 8765. The same requests work against
+the production relay using its configured bearer token and port; the production answer also carries
+the `pc_id` field.
 
 ```sh
 curl -sS -w '\nHTTP %{http_code}\n' http://127.0.0.1:8765/health
@@ -854,9 +883,32 @@ Client → server, accepted and logged:
 {"label": "rtvi", "type": "client-ready", "data": {"version": "2.0.0"}}
 ```
 
-`bot-ready` is sent on channel open regardless of whether `client-ready` has arrived; the fixture
-logs `client-ready` and does not gate on it. With `--tone` (the default) the server also publishes a
-48 kHz mono s16 440 Hz track and counts incoming audio frames.
+`bot-ready` is sent on channel open regardless of whether `client-ready` has arrived; the relay logs
+`client-ready` and does not gate on it. Unknown inbound types are logged and ignored.
+
+The production relay emits the following server → client messages. All use the RTVI envelope
+(`{"label":"rtvi","type":...,"data":{...}}`); the `data` fields are the contract:
+
+| `type` | `data` fields | Meaning |
+|---|---|---|
+| `bot-ready` | `version` | The data channel is open and the call loop is ready. |
+| `user-transcription` | `text`, `final` | Local STT partial or final transcript. |
+| `bot-llm-text` | `text` | The reply text the relay is about to speak. |
+| `bot-tts-started` / `bot-tts-stopped` | — | Speech playback began or ended (including a barge-in flush). |
+| `delegation-status` | `delegation_id`, `state`, `run_id` | Delegation lifecycle: `running`, `completed`, `failed` or `cancelled`. |
+| `approval-request` | `prompt_id`, `execution_generation`, `text`, `deadline_s` | A spoken approval prompt, including the required phrase and the remaining seconds. |
+| `approval-decision` | `prompt_id`, `choice`, `reason` | The posted decision (`once`/`deny`, the gateway's wire vocabulary) and why (`spoken` or `timeout`). |
+| `clarify-request` | `text`, `prompt_id`, `execution_generation` | A clarification question from the gateway, surfaced and spoken. |
+| `barge-in` | `turn_id`, `run_id`, `stop_ok` | The user interrupted playback; the run-stop outcome is in `stop_ok`. |
+| `call-cap-warning` | `seconds_left` | The call is approaching `MAX_CALL_MINUTES`. |
+| `session-closed` | `reason` | The session closed (`client_delete`, `call_cap`, `pc_failed`, `pc_closed`, `lease_stop`, `shutdown`, …). |
+
+Inbound audio is decoded to 16 kHz mono PCM16 and fed to the local VAD/STT pipeline; outbound audio is
+48 kHz mono s16 in 20 ms frames, decoded from the TTS Opus chunks, with paced silence when no speech is
+queued. A barge-in clears both the queued TTS audio and the outbound queue.
+
+The stub fixture also publishes a 48 kHz mono s16 440 Hz track when `--tone` is on and counts incoming
+audio frames; it does not speak or transcribe.
 
 End-to-end client, run against the fixture:
 
@@ -931,6 +983,21 @@ channel <- {"label": "rtvi", "type": "bot-ready", "data": {"version": "2.0.0"}}
 channel state: open
 received: 1
 ```
+
+The example above points at the stub fixture. Point `BASE` at the production relay and use its
+configured bearer token to run the same exchange against the real call loop.
+
+### 7.3 Session lifecycle and the call cap
+
+A session begins with `POST /start` (lease admission), then the offer, then the `chat` data channel.
+The relay closes it on `DELETE`, on peer-connection state `failed` or `closed`, on the lease stop hook,
+on app shutdown, or when the call cap is reached. Every close emits `session-closed` with a reason and
+releases the lease exactly once.
+
+`MAX_CALL_MINUTES` (default 60) bounds the call. Shortly before the cap the relay emits
+`call-cap-warning` with `seconds_left` and speaks a short warning. At the cap it speaks a goodbye, waits
+for that audio to drain (bounded), closes the peer connection and releases the lease (`session-closed`
+reason `call_cap`). The warning lead time is derived from the cap (at most 30 s, at least 1 s).
 
 The Android client's contract for this surface (states, pinning, retry policy) is in
 [`../android/README.md`](../android/README.md); the fixture's own notes are in

@@ -16,9 +16,11 @@ v0.1.1 is a pre-alpha baseline, not a finished product. It ships:
   the attachments module, with unit and instrumentation tests;
 - the deployment paths (Docker Compose and systemd), the operator runbook and the documentation set.
 
-It does **not** ship the call loop that composes transport, speech, brain and Hermes into the relay app.
-`relay.app` mounts no WebSocket/WebRTC route yet; the Android client talks to `android/stub-relay` for
-signalling. Do not claim an end-to-end voice call as a v0.1.1 feature. The full gap list is under
+It also ships the RTVI call loop: `relay.app` mounts the `/start` and `/sessions/{id}` signalling routes
+and bridges WebRTC audio into the local VAD/STT, voice brain, Hermes delegation, TTS, barge-in, spoken
+approval and `MAX_CALL_MINUTES` pipeline. An in-process `aiortc` client completes the loop in the test
+suite. The Android Connected/Ready path is still proven against `android/stub-relay` in instrumentation
+tests; do not claim a device-to-production-relay call yet. The full gap list is under
 [Known gaps](#known-gaps).
 
 ## Versioning
@@ -344,10 +346,12 @@ Defects found and fixed on the way to the tag:
 
 ## Known gaps
 
-- Call-loop wiring is not mounted (transport, speech, brain and Hermes are libraries; signalling comes
-  from `android/stub-relay`).
-- `POST /v1/runs` is reserved in the rate-limit table but not mounted.
-- `MAX_CALL_MINUTES` is configured but not enforced.
+- The relay serves RTVI and an in-process `aiortc` client completes the loop, but the Android
+  Connected/Ready path is still proven against `android/stub-relay` in instrumentation tests; a
+  device-to-production-relay call is not claimed.
+- `POST /v1/runs` is reserved in the rate-limit table but not mounted on the relay app; the call loop
+  calls the gateway's route through `relay/hermes/client.py`.
+- `MAX_CALL_MINUTES` is enforced by the RTVI call loop; the library-only paths do not apply it.
 - Release APKs must be built locally with signing credentials that live outside the repository. CI
   builds and tests debug only, so the first CI-verified signed APK is a local artefact.
 - The GitHub Actions emulator job runs on a hosted `ubuntu-latest` runner with KVM enabled; the local

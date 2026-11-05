@@ -62,7 +62,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install -e "./relay[dev]"
+      - run: python -m pip install -e "./relay[dev,webrtc]"
       - name: Lint
         run: |
           mapfile -t files < <(git ls-files '*.py')
@@ -124,7 +124,7 @@ jobs:
       - name: Stub relay environment
         run: |
           python3 -m venv relay-venv
-          relay-venv/bin/pip install --quiet aiortc
+          relay-venv/bin/pip install --quiet "./relay[webrtc]"
       - name: Instrumentation tests
         uses: reactivecircus/android-emulator-runner@v2
         with:

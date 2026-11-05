@@ -131,6 +131,60 @@ def test_ready_is_ready_with_writable_storage_and_token(
     assert str(tmp_path) not in storage["detail"]
 
 
+def test_ready_reports_rtvi_available_when_the_extra_is_installed(
+    make_app: Callable[..., FastAPI],
+    tmp_path: pathlib.Path,
+) -> None:
+    pytest.importorskip("aiortc")
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    outbox.mkdir()
+    app = make_app(
+        inbox_dir=str(inbox),
+        outbox_dir=str(outbox),
+        data_dir=str(tmp_path),
+        device_tokens_raw="device-token",
+    )
+
+    response = asyncio.run(_get(app, "/ready"))
+
+    assert response.status_code == 200
+    checks = {check["name"]: check for check in response.json()["checks"]}
+    assert checks["rtvi"]["ok"] is True
+    assert "aiortc" in checks["rtvi"]["detail"]
+
+
+def test_ready_reports_rtvi_missing_webrtc_dependencies(
+    make_app: Callable[..., FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    outbox.mkdir()
+    app = make_app(
+        inbox_dir=str(inbox),
+        outbox_dir=str(outbox),
+        data_dir=str(tmp_path),
+        device_tokens_raw="device-token",
+    )
+    monkeypatch.setattr(
+        "relay.transport.rtvi.rtvi_available",
+        lambda: (False, "missing webrtc dependencies: aiortc"),
+    )
+
+    response = asyncio.run(_get(app, "/ready"))
+
+    assert response.status_code == 503
+    body = response.json()
+    checks = {check["name"]: check for check in body["checks"]}
+    assert checks["rtvi"]["ok"] is False
+    assert "aiortc" in checks["rtvi"]["detail"]
+    assert body["status"] == "not_ready"
+
+
 def test_ready_fails_when_configured_storage_is_missing(
     make_app: Callable[..., FastAPI],
     tmp_path: pathlib.Path,

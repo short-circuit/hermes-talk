@@ -393,6 +393,49 @@ class HermesClient:
             elapsed_s=elapsed_s,
         )
 
+    async def approval(
+        self,
+        run_id: str,
+        *,
+        request_id: str,
+        execution_generation: int,
+        choice: str,
+    ) -> None:
+        """Post one spoken approval decision.
+
+        The body carries exactly the documented three keys.  A ``409`` means
+        the gateway has already settled the prompt (for example after a stale
+        re-ask) and is tolerated; every other error propagates.
+        """
+        if not isinstance(run_id, str) or not run_id.strip():
+            msg = "run_id must be a non-empty string"
+            raise HermesConfigError(msg)
+        if not isinstance(request_id, str) or not request_id.strip():
+            msg = "request_id must be a non-empty string"
+            raise HermesConfigError(msg)
+        if not isinstance(execution_generation, int) or isinstance(execution_generation, bool):
+            msg = "execution_generation must be an integer"
+            raise HermesConfigError(msg)
+        if not isinstance(choice, str) or not choice.strip():
+            msg = "choice must be a non-empty string"
+            raise HermesConfigError(msg)
+
+        body = {
+            "request_id": request_id,
+            "execution_generation": execution_generation,
+            "choice": choice,
+        }
+        try:
+            await self._request(
+                "POST",
+                f"/v1/runs/{quote(run_id.strip(), safe='')}/approval",
+                json=body,
+                headers=self._headers(),
+                request_timeout=self._stop_timeout_s,
+            )
+        except HermesConflictError:
+            return
+
     async def events(
         self,
         run_id: str,

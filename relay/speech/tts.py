@@ -12,9 +12,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -673,18 +674,22 @@ class StreamingTts:
         }
 
 
-def create_tts(settings: Any) -> StreamingTts:
-    """Build the configured streaming TTS pipeline."""
+def _validate_tts_engine(settings: Any) -> None:
     engine_name = str(settings.tts_engine).strip().lower()
     if engine_name != "kokoro":
         msg = f"unsupported TTS engine {settings.tts_engine!r}: expected 'kokoro'"
         raise SpeechError(msg)
-    engine = KokoroTtsEngine(settings.tts_model_path, settings.tts_voices_path)
-    limits = BufferLimits(
+
+
+def _tts_limits(settings: Any) -> BufferLimits:
+    return BufferLimits(
         max_bytes=settings.speech_max_buffer_bytes,
         max_frames=settings.speech_max_buffer_frames,
         name="tts_audio",
     )
+
+
+def _build_streaming_tts(settings: Any, engine: Any) -> StreamingTts:
     return StreamingTts(
         engine,
         voice=settings.tts_voice,
@@ -693,5 +698,79 @@ def create_tts(settings: Any) -> StreamingTts:
         max_pending_sentences=settings.tts_max_pending_sentences,
         backpressure_timeout_s=settings.speech_backpressure_timeout_s,
         first_segment_max_chars=settings.tts_first_segment_max_chars,
-        limits=limits,
+        limits=_tts_limits(settings),
     )
+
+
+class _LazyTtsEngine:
+    """Construct the Kokoro engine on first synthesis, not at app boot.
+
+    The engine loads an ONNX model and a voices file.  Building it eagerly in
+    ``create_app`` would add hundreds of milliseconds to every boot even when
+    no call is placed, so the factory defers the load until the first reply.
+    The wrapper is shared by every :class:`StreamingTts` built from one factory
+    and construction is serialized for the rare concurrent first call.
+    """
+
+    name = "kokoro"
+
+    def __init__(self, model_path: Any, voices_path: Any) -> None:
+        self._model_path = model_path
+        self._voices_path = voices_path
+        self._engine: KokoroTtsEngine | None = None
+        self._lock = threading.Lock()
+
+    def _get(self) -> KokoroTtsEngine:
+        with self._lock:
+            if self._engine is None:
+                self._engine = KokoroTtsEngine(self._model_path, self._voices_path)
+            return self._engine
+
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str = "af_sarah",
+        speed: float = 1.0,
+    ) -> PcmChunk:
+        engine = await asyncio.to_thread(self._get)
+        return await engine.synthesize(text, voice=voice, speed=speed)
+
+    def describe(self) -> dict[str, object]:
+        engine = self._engine
+        if engine is not None:
+            return engine.describe()
+        model = Path(self._model_path).name if self._model_path is not None else None
+        voices = Path(self._voices_path).name if self._voices_path is not None else None
+        return {
+            "engine": self.name,
+            "model": model,
+            "voices": voices,
+            "sample_rate": _KOKORO_SAMPLE_RATE,
+            "default_voice": "af_sarah",
+            "loaded": False,
+        }
+
+
+def create_tts(settings: Any) -> StreamingTts:
+    """Build the configured streaming TTS pipeline."""
+    _validate_tts_engine(settings)
+    engine = KokoroTtsEngine(settings.tts_model_path, settings.tts_voices_path)
+    return _build_streaming_tts(settings, engine)
+
+
+def create_tts_factory(settings: Any) -> Callable[[], StreamingTts]:
+    """Return a factory that builds a fresh TTS stream per reply.
+
+    The returned callable shares one lazily constructed Kokoro engine across
+    every stream, so the model is loaded once per process.  Each call returns a
+    new :class:`StreamingTts` because a stream cannot be reused after
+    :meth:`StreamingTts.flush`.
+    """
+    _validate_tts_engine(settings)
+    engine = _LazyTtsEngine(settings.tts_model_path, settings.tts_voices_path)
+
+    def _factory() -> StreamingTts:
+        return _build_streaming_tts(settings, engine)
+
+    return _factory

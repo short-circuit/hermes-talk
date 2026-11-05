@@ -29,8 +29,8 @@ Repository map:
 Legend:
 
 - **WIRED** — mounted on the FastAPI app (`relay/app.py`) or started by the deployment.
-- **LIBRARY** — shipped and unit-tested, imported by callers and tests; not yet mounted on the app.
-  The call loop that composes these modules is a separate wiring task.
+- **LIBRARY** — shipped and unit-tested, imported by callers and tests; not mounted directly on the
+  app. The call loop (`relay/transport/call_loop.py`) composes these modules for RTVI sessions.
 - **FIXTURE** — test-only, not part of the production process.
 
 ### 1.1 Relay (Python, `relay/`)
@@ -47,14 +47,16 @@ Legend:
 | HTTP file API | `relay/api/attach.py`, `relay/api/files.py` | `POST/PUT /v1/attachments`, `GET/HEAD /v1/artifacts[/{id}]` | WIRED |
 | Logging and audit | `relay/logging/` | `configure_logging`, `configure_redaction`, `scrub`, `audit`, `AuditLog`, retention and prune CLI | WIRED |
 | Maintenance | `relay/maintenance/` | `python -m relay.maintenance prune`, Hermes session deletion | CLI |
-| Turn detection and barge-in | `relay/transport/turns.py` | `TurnController`, `EnergyVad`, `EndOfTurnDetector`, `TtsPlayback`, `HttpRunStopper`, `BargeInGate` (from `relay/limits.py`) | LIBRARY |
-| Speech input | `relay/speech/stt.py`, `relay/speech/audio.py` | `create_stt`, `SherpaStreamingStt`, `WhisperFallbackStt`, `PcmChunk`, `resample_pcm16` | LIBRARY |
-| Speech output | `relay/speech/tts.py`, `relay/speech/audio.py`, `relay/speech/backpressure.py` | `create_tts`, `StreamingTts`, `KokoroTtsEngine`, `OpusEncoder`, `BoundedAudioBuffer` | LIBRARY |
-| Voice brain | `relay/brain/router.py`, `relay/brain/prompts.py`, `relay/brain/tools.json` | `VoiceBrainRouter.route`, `RouterConfig`, `ToolRegistry`, `DirectAnswerPolicy`, `SYSTEM_PREAMBLE`, `TOOL_ALLOWLIST` | LIBRARY |
-| Delegation lifecycle | `relay/brain/delegation.py` | `DelegationService.delegate`, `delegation_input`, `envelope`, `DelegationState` | LIBRARY |
-| Spoken approval gate | `relay/brain/approvals.py` | `ApprovalGate.request`, `.answer`, `.expire`, `Provenance`, `Decision` | LIBRARY |
-| Tool narration | `relay/brain/narration.py` | `ToolNarrator.observe`, `phrase_for_tool`, `redact_spoken` | LIBRARY |
-| Hermes adapter | `relay/hermes/client.py`, `relay/hermes/events.py` | `HermesClient.submit_run`, `.events`, `.get_run`, `.stop`, `SseDecoder`, `EventGate`, `EventKind` | LIBRARY |
+| Turn detection and barge-in | `relay/transport/turns.py` | `TurnController`, `EnergyVad`, `EndOfTurnDetector`, `TtsPlayback`, `HttpRunStopper`, `BargeInGate` (from `relay/limits.py`) | LIBRARY (used by the call loop) |
+| RTVI transport | `relay/transport/rtvi.py` | `RtviSessionManager`, `RtviSession`, `/start` and `/sessions/{id}` signalling, WebRTC audio bridge, `chat` data channel | WIRED |
+| Call loop | `relay/transport/call_loop.py` | `CallLoop`, STT/VAD/turn pipeline, voice-brain dispatch, delegation narration, approval gate, barge-in, call cap | WIRED |
+| Speech input | `relay/speech/stt.py`, `relay/speech/audio.py` | `create_stt`, `SherpaStreamingStt`, `WhisperFallbackStt`, `PcmChunk`, `resample_pcm16` | LIBRARY (used by the call loop) |
+| Speech output | `relay/speech/tts.py`, `relay/speech/audio.py`, `relay/speech/backpressure.py` | `create_tts`, `create_tts_factory`, `StreamingTts`, `KokoroTtsEngine`, `OpusEncoder`, `BoundedAudioBuffer` | LIBRARY (used by the call loop) |
+| Voice brain | `relay/brain/router.py`, `relay/brain/prompts.py`, `relay/brain/tools.json` | `VoiceBrainRouter.route`, `.from_settings`, `RouterConfig`, `ToolRegistry`, `DirectAnswerPolicy`, `SYSTEM_PREAMBLE`, `TOOL_ALLOWLIST` | LIBRARY (used by the call loop) |
+| Delegation lifecycle | `relay/brain/delegation.py` | `DelegationService.delegate`, `delegation_input`, `envelope`, `DelegationState` | LIBRARY (used by the call loop) |
+| Spoken approval gate | `relay/brain/approvals.py` | `ApprovalGate.request`, `.answer`, `.expire`, `Provenance`, `Decision` | LIBRARY (used by the call loop) |
+| Tool narration | `relay/brain/narration.py` | `ToolNarrator.observe`, `phrase_for_tool`, `redact_spoken` | LIBRARY (used by the call loop) |
+| Hermes adapter | `relay/hermes/client.py`, `relay/hermes/events.py` | `HermesClient.submit_run`, `.events`, `.get_run`, `.stop`, `.approval`, `SseDecoder`, `EventGate`, `EventKind` | LIBRARY (used by the call loop) |
 
 The relay's HTTP surface served today is exactly:
 
@@ -68,10 +70,14 @@ PUT  /v1/attachments    same handler, idempotent transport
 GET  /v1/artifacts      authenticated artifact listing
 GET  /v1/artifacts/{id} authenticated download (ETag, 304, HEAD)
 HEAD /v1/artifacts/{id} metadata only
+POST /start             authenticated RTVI session admission
+POST /sessions/{id}/api/offer   authenticated SDP offer -> answer
+PATCH /sessions/{id}/api/offer  authenticated trickle ICE
+DELETE /sessions/{id}   unauthenticated RTVI session close (fixture contract parity)
 ```
 
-`relay/limits.py::RATE_LIMIT_ROUTES` already reserves `POST /v1/runs` for the relay-side run endpoint
-that the call loop will expose; the route is not mounted yet.
+`relay/limits.py::RATE_LIMIT_ROUTES` reserves `POST /v1/runs` for the relay-side run endpoint; the relay
+app does not mount it. The call loop calls the gateway's `/v1/runs` through `relay/hermes/client.py`.
 
 ### 1.2 Android client (`android/`)
 
@@ -85,10 +91,11 @@ that the call loop will expose; the route is not mounted yet.
 | Stub relay | `android/stub-relay/relay.py` | SmallWebRTC/RTVI signalling fixture: `/start`, `/sessions/{id}/api/offer`, trickle ICE, `DELETE /sessions/{id}` | FIXTURE |
 
 `RtviSession` posts to `RelayEndpoint.startUrl()` (`<base>/start`) with a bearer header carrying the
-device token, then answers the SDP offer on the session URL the relay returns.
-The production relay does not mount that signalling endpoint yet; the Android client exercises it
-against `android/stub-relay/relay.py`. Media would terminate in the relay process over DTLS-SRTP; no
-UDP port is published by the compose file (`docs/DEPLOYMENT.md`, port table).
+device token, then answers the SDP offer on the session URL the relay returns. The production relay
+mounts that surface in `relay/transport/rtvi.py`; media terminates in the relay process over
+DTLS-SRTP. The Android instrumentation suite still exercises the same contract against
+`android/stub-relay/relay.py`. The compose file does not publish a UDP port (`docs/DEPLOYMENT.md`,
+port table), so a device-to-production-relay call over the proxy is not claimed yet.
 
 ### 1.3 Deployment (`deploy/`)
 
@@ -149,7 +156,7 @@ UDP port is published by the compose file (`docs/DEPLOYMENT.md`, port table).
 | Boundary | What crosses | Control | Enforced in |
 |---|---|---|---|
 | **TB1** phone → proxy | HTTP requests, bearer device token, attachment bytes, artifact downloads | TLS from the internal CA, SPKI pin on the device, bearer `Authorization`, 401 with `WWW-Authenticate`, admission limits | `deploy/Caddyfile`, `relay/auth/deps.py`, `relay/auth/tokens.py`, `android/rtvi/TlsTrust.kt`, `relay/limits.py` |
-| **TB1m** phone ⇄ WebRTC endpoint | microphone PCM, Opus, RTVI data messages | DTLS-SRTP, bearer token on `/start`, SDP/ICE validated by the endpoint | `android/stub-relay/relay.py` (today), `relay/transport/turns.py` (audio decisions) |
+| **TB1m** phone ⇄ WebRTC endpoint | microphone PCM, Opus, RTVI data messages | DTLS-SRTP, bearer token on `/start`, SDP/ICE validated by the endpoint, session admission and call cap | `relay/transport/rtvi.py`, `relay/transport/call_loop.py`, `relay/transport/turns.py`; `android/stub-relay/relay.py` remains the Android instrumentation fixture |
 | **TB2** proxy → relay | plain HTTP on loopback | relay binds `127.0.0.1` only; the proxy is the sole LAN listener; no secret in the URL | `relay/config.py` (`relay_host`), `deploy/compose.yaml`, `deploy/hermes-talk.service` |
 | **TB3** relay → Hermes | run input, session key, bearer token, SSE events | loopback only, one bearer token, session key validated locally, response bodies validated against the documented envelope, typed errors | `relay/hermes/client.py`, `relay/hermes/events.py`, `relay/config.py` |
 | **TB4** relay → voice brain | utterance text, tool schemas | loopback only, optional bearer key, allowlist validation of every returned tool name and argument | `relay/brain/router.py`, `relay/brain/tools.json` |
@@ -262,8 +269,9 @@ nothing is submitted to the gateway.
 
 The gate never reads tool output as consent, and narration can never approve. The decision carries
 `prompt_id` and `execution_generation`, which are exactly the fields the gateway's approval endpoint
-requires (section 5.5). The HTTP response call is not yet part of `relay/hermes/client.py`; the
-adapter reads `pending_controls` from `GET /v1/runs/{id}`.
+requires (section 5.5). `HermesClient.approval(run_id, request_id=..., execution_generation=...,
+choice=...)` posts exactly those three keys to `POST /v1/runs/{run_id}/approval` and tolerates a `409`
+(run already settled); the adapter also reads `pending_controls` from `GET /v1/runs/{id}`.
 
 ## 4. Relay ↔ Hermes contract
 
