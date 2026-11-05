@@ -14,8 +14,9 @@
 #      the user dialog;
 #   3. the default suite (non-@LargeTest) with the shortened screen-off window
 #      and the shortened persistent-assistant soak, followed by a hard
-#      verification that the assistant-role/keyevent-219, screen-off and
-#      wake-word cases actually ran and passed;
+#      verification that the assistant-role/keyevent-219, screen-off,
+#      wake-word, per-fixture detection, call-handover and real-AudioRecord
+#      cases actually ran and passed;
 #   4. the @LargeTest wake-word screen-off soak with a shortened window, verified
 #      the same way.
 #
@@ -111,7 +112,9 @@ bash scripts/verify-instrumentation-results.sh --dir "$RESULTS_DIR" \
     --require "com.example.hermestalk.call.CallForegroundServiceTest#callSurvivesScreenOffAndReleasesTheMicrophoneWhenEnded" \
     --require "com.example.hermestalk.persistent.PersistentAssistantServiceTest#screenOffAndDozeKeepTheServiceAlive" \
     --require "com.example.hermestalk.persistent.AssistantWakeWordServiceTest#wakeWordDetectionLaunchesTheAssistantWithinBudget" \
-    --require "com.example.hermestalk.persistent.AssistantWakeWordServiceTest#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers"
+    --require "com.example.hermestalk.persistent.AssistantWakeWordServiceTest#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers" \
+    --require "com.example.hermestalk.persistent.AssistantWakeWordServiceTest#liveCallTakesTheMicrophoneAndReleasesTheAudioRecord" \
+    --require "com.example.hermestalk.persistent.AssistantWakeWordServiceTest#realAudioRecordListenReleaseCycleWorks"
 
 # The wake-word screen-off soak is @LargeTest: it is the one case the default
 # suite excludes by annotation, so it gets its own explicit run here rather than

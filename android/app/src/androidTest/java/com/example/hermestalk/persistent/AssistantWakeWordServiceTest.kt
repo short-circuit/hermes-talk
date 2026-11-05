@@ -19,14 +19,29 @@ import com.example.hermestalk.call.AssistantWakeWord
 import com.example.hermestalk.call.AssistantWakeWordController
 import com.example.hermestalk.call.AssistantWakeWordHooks
 import com.example.hermestalk.call.AssistantWakeWordPolicy
+import com.example.hermestalk.call.CallController
 import com.example.hermestalk.call.CallControllers
 import com.example.hermestalk.call.PersistentAssistant
 import com.example.hermestalk.call.PersistentAssistantController
 import com.example.hermestalk.call.PersistentAssistantService
 import com.example.hermestalk.call.SharedPreferencesPersistentAssistantSettingsStore
+import com.example.hermestalk.call.isLive
+import com.example.hermestalk.rtvi.RelaySettings
 import com.example.hermestalk.wakeword.SharedPreferencesWakeWordSettingsStore
+import com.example.hermestalk.wakeword.WakeWordCaptureStart
+import com.example.hermestalk.wakeword.WakeWordConfig
+import com.example.hermestalk.wakeword.WakeWordEngine
+import com.example.hermestalk.wakeword.WakeWordListener
 import com.example.hermestalk.wakeword.WakeWordSettings
 import com.example.hermestalk.wakeword.readWavFixture
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -45,11 +60,18 @@ import org.junit.runner.RunWith
  * A scripted microphone replays the checked-in 16 kHz fixtures through the real
  * on-device keyword engine. The runner, service, audio cleanup, ACTION_ASSIST
  * launch and microphone arbitration are all production code; only the capture
- * source is replaced.
+ * source is replaced. Each fixture is played on its own, so a missed positive
+ * and a false trigger on a negative fail separately.
+ *
+ * Two cases deliberately bypass the capture hook: `liveCallTakesTheMicrophone…`
+ * starts a real call through `CallControllers` and therefore exercises
+ * `CallController` → `ProcessAssistantMicCoordinator` → the runner, and
+ * `realAudioRecordListenReleaseCycleWorks` drives `WakeWordListener` against a
+ * real `AudioRecord`.
  *
  * The soak test defaults to 1800 seconds and can be shortened through
  * `-e wakeWordSoakSeconds <seconds>` when running through
- * `adb shell am instrument`.
+ * `adb shell instrument`.
  */
 @RunWith(AndroidJUnit4::class)
 class AssistantWakeWordServiceTest {
@@ -238,19 +260,77 @@ class AssistantWakeWordServiceTest {
 
     @Test
     fun fixturesAreDetectedWithZeroMissesAndNoFalseTriggers() {
-        val names = POSITIVE_FIXTURES + NEGATIVE_FIXTURES
-        val source = FixtureSequencePlayback(
-            names.map { readWavFixture(testAssets, "wakeword/$it") },
-        )
         // The production launcher opens MainActivity, which starts a relay call
         // and suspends the wake word after the first detection. Stub only the
-        // Activity launch so the whole sequence can run; the service, runner,
-        // capture restart and keyword engine remain production code.
+        // Activity launch so each fixture can be played on its own; the service,
+        // runner, capture restart and keyword engine remain production code.
         AssistantWakeWordHooks.launcher = object : AssistantLauncher {
             override fun launchWakeWord(): AssistantLaunchResult =
                 AssistantLaunchResult(started = true)
         }
-        installCapture(source)
+
+        // Play every fixture one at a time, with a fresh runner for each, so a
+        // miss in one positive cannot be masked by a detection in another and a
+        // false trigger in one negative cannot be masked by the count of the
+        // other fixtures.
+        val misses = mutableListOf<String>()
+        for (name in POSITIVE_FIXTURES) {
+            val source = startSingleFixture(name)
+            try {
+                await("a detection for positive fixture $name", FIXTURE_TIMEOUT_MS) {
+                    AssistantWakeWord.state.value.detectionCount >= 1
+                }
+            } catch (miss: AssertionError) {
+                misses += name
+                Log.w(USAGE_TAG, "positive_fixture=$name detections=0: ${miss.message}")
+            } finally {
+                Log.i(
+                    USAGE_TAG,
+                    "positive_fixture=$name detections=${AssistantWakeWord.state.value.detectionCount} " +
+                        "finished=${source.finished}",
+                )
+                stopService()
+            }
+        }
+
+        val falseTriggers = mutableListOf<String>()
+        for (name in NEGATIVE_FIXTURES) {
+            val source = startSingleFixture(name)
+            try {
+                await("the $name playback", FIXTURE_TIMEOUT_MS) { source.finished }
+                // Let the engine drain the trailing silence and the cooldown gate
+                // settle before counting.
+                SystemClock.sleep(FIXTURE_SETTLE_MS)
+                val detections = AssistantWakeWord.state.value.detectionCount
+                Log.i(USAGE_TAG, "negative_fixture=$name detections=$detections")
+                if (detections != 0) {
+                    falseTriggers += "$name ($detections)"
+                }
+            } finally {
+                stopService()
+            }
+        }
+
+        // Report both failure modes in one message so neither can mask the
+        // other: a missed positive and a false trigger on a negative are
+        // separate findings, each named with its fixture.
+        val problems = buildList {
+            if (misses.isNotEmpty()) {
+                add("positive fixtures produced no detection: $misses")
+            }
+            if (falseTriggers.isNotEmpty()) {
+                add("negative fixtures produced a detection: $falseTriggers")
+            }
+        }
+        assertTrue(problems.joinToString("\n"), problems.isEmpty())
+    }
+
+    @Test
+    fun liveCallTakesTheMicrophoneAndReleasesTheAudioRecord() {
+        // A scripted microphone keeps the fixture deterministic; the runner,
+        // service, CallController and ProcessAssistantMicCoordinator are all
+        // production code. The real AudioRecord path has its own case below.
+        installCapture(FixturePlayback(readWavFixture(testAssets, NEGATIVE_FIXTURE)))
         enableStores()
         AssistantWakeWord.reset()
 
@@ -259,28 +339,141 @@ class AssistantWakeWordServiceTest {
         await("wake-word listening", START_TIMEOUT_MS) {
             AssistantWakeWord.state.value.listening
         }
-        await("all ${POSITIVE_FIXTURES.size} positives detected", FIXTURE_SET_TIMEOUT_MS) {
-            AssistantWakeWord.state.value.detectionCount >= POSITIVE_FIXTURES.size
-        }
-        await("fixture sequence finished", FIXTURE_SET_TIMEOUT_MS) { source.finished }
-        // let the cooldown gate close after the last accepted detection, then prove
-        // the negatives added nothing.
-        SystemClock.sleep(COOLDOWN_SETTLE_MS)
+        assertFalse(
+            "AudioRecord must be held before the call",
+            AssistantWakeWord.audioRecordReleased(),
+        )
 
-        val state = AssistantWakeWord.state.value
+        // Record every published ownership state. The handover is a transition:
+        // when the relay is unreachable the call fails a moment later and the
+        // runner resumes, so Call ownership has to be observed as it happens
+        // rather than sampled after startCall() returns.
+        val samples = CopyOnWriteArrayList<MicOwnershipSample>()
+        val observerScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val observer = observerScope.launch {
+            AssistantWakeWord.state.collect { state ->
+                samples += MicOwnershipSample(
+                    owner = state.micOwner,
+                    audioRecordReleased = AssistantWakeWord.audioRecordReleased(),
+                    atMillis = SystemClock.uptimeMillis(),
+                )
+            }
+        }
+
+        lateinit var controller: CallController
+        try {
+            instrumentation.runOnMainSync {
+                controller = CallControllers.get(context)
+                controller.startCall(
+                    RelaySettings(relayUrl = CALL_RELAY_URL, deviceToken = ""),
+                )
+            }
+
+            // The CallController's start effect calls
+            // ProcessAssistantMicCoordinator.suspendWakeWord() synchronously, so
+            // the wake-word AudioRecord must already be released here.
+            assertTrue(
+                "the call did not release the wake-word AudioRecord",
+                AssistantWakeWord.audioRecordReleased(),
+            )
+            assertFalse(
+                "the capture thread survived the call start",
+                AssistantWakeWord.captureThreadAlive(),
+            )
+
+            await("the microphone to be handed to the call", HANDOVER_TIMEOUT_MS) {
+                samples.any { it.owner == AssistantMicOwner.Call }
+            }
+            val handover = samples.first { it.owner == AssistantMicOwner.Call }
+            assertEquals(
+                "the runner must report the call as the microphone owner",
+                AssistantMicOwner.Call,
+                handover.owner,
+            )
+            assertTrue(
+                "micOwner was Call while the wake-word AudioRecord was still held",
+                handover.audioRecordReleased,
+            )
+            if (controller.uiState.value.state.isLive) {
+                assertFalse(
+                    "wake-word capture resumed while the call was still live",
+                    AssistantWakeWord.state.value.listening,
+                )
+            }
+            Log.i(
+                USAGE_TAG,
+                "call_handover mic_owner=${handover.owner} " +
+                    "audio_record_released=${handover.audioRecordReleased} " +
+                    "observed=${samples.map { it.owner.name }}",
+            )
+        } finally {
+            instrumentation.runOnMainSync {
+                if (controller.uiState.value.state.isLive) {
+                    controller.endCall()
+                }
+            }
+            observer.cancel()
+            observerScope.cancel()
+        }
+
+        // The call released the microphone: the runner must take it back and
+        // report wake-word ownership again.
+        await("wake-word capture after the call", RESUME_TIMEOUT_MS) {
+            val state = AssistantWakeWord.state.value
+            state.listening &&
+                state.micOwner == AssistantMicOwner.WakeWord &&
+                !AssistantWakeWord.audioRecordReleased()
+        }
+    }
+
+    @Test
+    fun realAudioRecordListenReleaseCycleWorks() {
+        // No capture hook is installed: the production WakeWordListener opens a
+        // real AudioRecord and runs its own capture thread. The emulator
+        // microphone is silent, so this proves the listen/release cycle and that
+        // the read loop delivers a chunk, not a detection.
+        AssistantWakeWordHooks.reset()
+        val config = WakeWordConfig()
+        val engine = WakeWordEngine.create(context, config)
+        val failures = CopyOnWriteArrayList<String>()
+        val chunks = AtomicInteger(0)
+        val listener = WakeWordListener(
+            engine = engine,
+            permissionChecker = WakeWordListener.permissionChecker(context),
+            config = config,
+        )
+        listener.onFailure = { message -> failures += message }
+        listener.onLevel = { chunks.incrementAndGet() }
+
+        try {
+            assertEquals(
+                "the real AudioRecord could not be started",
+                WakeWordCaptureStart.Started,
+                listener.start(),
+            )
+            assertTrue("AudioRecord was not created", listener.audioRecordCreated)
+            assertFalse(
+                "AudioRecord was released right after start",
+                listener.audioRecordReleased,
+            )
+            assertTrue("the capture thread is not running", listener.threadAlive)
+
+            await("a chunk from the real AudioRecord", RECORD_READ_TIMEOUT_MS) {
+                chunks.get() > 0
+            }
+            assertTrue("the capture thread died", listener.threadAlive)
+            assertTrue("the listener reported a failure: $failures", failures.isEmpty())
+        } finally {
+            listener.stop()
+            engine.release()
+        }
+
+        assertFalse("the capture loop survived stop()", listener.running)
+        assertTrue("AudioRecord was not released", listener.audioRecordReleased)
+        assertFalse("the capture thread survived stop()", listener.threadAlive)
         Log.i(
             USAGE_TAG,
-            "fixture_set positives=${POSITIVE_FIXTURES.size} negatives=${NEGATIVE_FIXTURES.size} " +
-                "detections=${state.detectionCount} false_trigger_count=${state.falseTriggerCount}",
-        )
-        assertEquals(
-            "expected one detection per positive fixture and none from the negatives",
-            POSITIVE_FIXTURES.size,
-            state.detectionCount,
-        )
-        assertTrue(
-            "the false-trigger log did not record the accepted detections",
-            state.falseTriggerCount >= POSITIVE_FIXTURES.size,
+            "real_audio_record chunks=${chunks.get()} failures=${failures.size}",
         )
     }
 
@@ -373,6 +566,35 @@ class AssistantWakeWordServiceTest {
         }
     }
 
+    /**
+     * Start a fresh runner that plays exactly [fixtureName] once, then silence.
+     * A new service per fixture gives each one a fresh keyword engine and a
+     * fresh cooldown gate, so detections cannot leak between fixtures.
+     */
+    private fun startSingleFixture(fixtureName: String): FixtureSequencePlayback {
+        val source = FixtureSequencePlayback(
+            listOf(readWavFixture(testAssets, "wakeword/$fixtureName")),
+            gapMillis = 0L,
+        )
+        installCapture(source)
+        enableStores()
+        AssistantWakeWord.reset()
+
+        stopService()
+        PersistentAssistantController.startFromForeground(context)
+        await("wake-word listening for $fixtureName", START_TIMEOUT_MS) {
+            AssistantWakeWord.state.value.listening
+        }
+        return source
+    }
+
+    /** One published microphone-ownership observation. */
+    private data class MicOwnershipSample(
+        val owner: AssistantMicOwner,
+        val audioRecordReleased: Boolean,
+        val atMillis: Long,
+    )
+
     private fun enableStores() {
         SharedPreferencesWakeWordSettingsStore(context).save(
             WakeWordSettings(enabled = true),
@@ -450,8 +672,14 @@ class AssistantWakeWordServiceTest {
         val NEGATIVE_FIXTURES = listOf(
             "negative_af_heart.wav", "negative_am_michael.wav", "negative_bf_emma.wav",
         )
-        const val FIXTURE_SET_TIMEOUT_MS = 300_000L
-        const val COOLDOWN_SETTLE_MS = 4_000L
+        // A single fixture is 2-3 s of audio plus service start/stop, so one
+        // fixture gets a generous but bounded window.
+        const val FIXTURE_TIMEOUT_MS = 45_000L
+        const val FIXTURE_SETTLE_MS = 3_000L
+        const val HANDOVER_TIMEOUT_MS = 20_000L
+        const val RESUME_TIMEOUT_MS = 30_000L
+        const val RECORD_READ_TIMEOUT_MS = 20_000L
+        const val CALL_RELAY_URL = "http://127.0.0.1:8790"
         const val USAGE_TAG = "WakeWordUsage"
         const val DEFAULT_SOAK_SECONDS = 1_800L
         const val START_TIMEOUT_MS = 30_000L

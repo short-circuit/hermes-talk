@@ -379,8 +379,10 @@ smoke tests.
    `KEYCODE_ASSIST` — resumes `MainActivity` on the call screen),
    `CallForegroundServiceTest#callSurvivesScreenOffAndReleasesTheMicrophoneWhenEnded`,
    `PersistentAssistantServiceTest#screenOffAndDozeKeepTheServiceAlive`,
-   `AssistantWakeWordServiceTest#wakeWordDetectionLaunchesTheAssistantWithinBudget`
-   and `#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers` all ran and passed;
+   `AssistantWakeWordServiceTest#wakeWordDetectionLaunchesTheAssistantWithinBudget`,
+   `#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers`,
+   `#liveCallTakesTheMicrophoneAndReleasesTheAudioRecord` and
+   `#realAudioRecordListenReleaseCycleWorks` all ran and passed;
 4. runs the one `@LargeTest` case the default suite excludes —
    `AssistantWakeWordServiceTest#continuousListeningForTheConfiguredWindow` — with
    `wakeWordSoakSeconds=120`, and verifies it the same way.
@@ -714,4 +716,41 @@ Review fixes in the same commit: the Settings counter labelled "false triggers" 
 `BOOT_COMPLETED` arrives before unlock; `AssistantWakeWordRunner.release()` now takes the capture
 lock so a teardown racing an in-flight `startCapture()` cannot leak the `AudioRecord`, the capture
 thread or the listening wake lock (`releaseDuringStartStopsTheCaptureAndReportsNotListening`).
+
+### P7 test-gate hardening (2026-11-05)
+
+Follow-up to the review above: three cases could look greener than the behaviour
+they claimed. All three now fail on the behaviour they name, and the CI gate
+requires the two new cases.
+
+| Gap | How it was closed |
+|---|---|
+| `PersistentAssistantServiceTest#backgroundStartUsesThePlatformAllowedForegroundType` derived its expected type from the observed state (`micRefusal != null` → specialUse, else microphone), so its first `assertEquals` could not fail | The expectation is now computed before the start from the preconditions only — the RECORD_AUDIO state and the API level through `PersistentAssistant.attemptOrder` — and the reported type must be one of those candidates. A reported `None` (or any type outside the order) fails. The refusal record must agree with the accepted type (a recorded refusal excludes microphone; an accepted microphone clears it), and the `dumpsys` assertion is keyed on the type the service reported, so it is platform evidence for that claim instead of a restatement |
+| `AssistantWakeWordServiceTest#fixturesAreDetectedWithZeroMissesAndNoFalseTriggers` only compared the total detection count with the number of positives, so one missed positive plus one false trigger on a negative passed | Each fixture is played on its own through a fresh service, runner, keyword engine and cooldown gate. Every positive must produce a detection (a miss fails with the fixture name) and every negative must produce none (a false trigger fails with the fixture name and its count), so the two failure modes are reported separately |
+| Every automated wake-word case replaced `AssistantWakeWordHooks.captureFactory`, so the real `WakeWordListener`/`AudioRecord` path and `CallController` → `ProcessAssistantMicCoordinator` were only covered by the manual RUNBOOK §12 checks | `#liveCallTakesTheMicrophoneAndReleasesTheAudioRecord` starts a real call through `CallControllers`, asserts the synchronous suspend released the wake-word `AudioRecord`, and observes the published `micOwner == AssistantMicOwner.Call` with the record released, then the wake-word resume after the call ends. `#realAudioRecordListenReleaseCycleWorks` installs no capture hook and drives `WakeWordListener` against a real `AudioRecord`: start, a delivered 100 ms chunk, then stop with the record released and the thread joined |
+
+Run record on `hermes_talk_34` (API 34, emulator-5554), stub relay on
+`127.0.0.1:8790` via `adb reverse`, at `6e051d0` plus this change:
+
+| Gate | Command | Result |
+|---|---|---|
+| Instrumentation (default suite, `LargeTest` excluded, `screenOffSeconds=15`, `persistentSoakSeconds=15`) | `scripts/android-instrumentation.sh` | 37 tests, 0 failure(s), 0 error(s), 0 skipped |
+| Gate honesty | `scripts/verify-instrumentation-results.sh` with all eight required cases, including `#liveCallTakesTheMicrophoneAndReleasesTheAudioRecord` and `#realAudioRecordListenReleaseCycleWorks` | PASSED |
+| Wake-word soak (`@LargeTest`, `wakeWordSoakSeconds=120`) | same script, phase 4 | 1 test, 0 skipped, verified |
+| Unit tests | `./gradlew test --rerun-tasks` | 562 tests, 0 failures, 0 errors, 0 skipped |
+| Hygiene | `scripts/check_repo_hygiene.sh` | clean (365 files) |
+
+Observed evidence from the run (`logcat -s WakeWordUsage`): every positive
+fixture logged `detections=1` and every negative `detections=0`; the call
+handover logged `mic_owner=Call audio_record_released=true
+observed=[WakeWord, WakeWord, Call]`; the real `AudioRecord` case logged
+`chunks=2 failures=0`.
+
+The per-fixture gate was also shown to fail: with one negative fixture moved into
+the positive list and one positive moved into the negative list, the case failed
+with `positive fixtures produced no detection: [negative_bf_emma.wav]` and
+`negative fixtures produced a detection: [hey_hermes_bm_lewis.wav (1)]` — the two
+failure modes are independent. The old count-only assertion would have passed
+that run (10 detections across 10 "positives").
+
 

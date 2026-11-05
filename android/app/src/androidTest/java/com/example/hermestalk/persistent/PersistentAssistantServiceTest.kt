@@ -23,7 +23,8 @@ import com.example.hermestalk.wakeword.SharedPreferencesWakeWordSettingsStore
 import com.example.hermestalk.wakeword.WakeWordSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -38,8 +39,10 @@ import org.junit.runner.RunWith
  * actually allows. Under `am instrument` the target process is granted
  * background-activity-start privileges, so Android 14 may accept the
  * microphone type even after Home; a real background start falls back to
- * specialUse and records the refusal. The deterministic fallback itself is
- * covered by `PersistentAssistantPolicyTest`. The soak test defaults to 600
+ * specialUse and records the refusal. The expectation is computed from the
+ * preconditions (permission state and API level) through the pure policy, never
+ * from the state under test; the deterministic fallback itself is covered by
+ * `PersistentAssistantPolicyTest`. The soak test defaults to 600
  * seconds and can be shortened through `-e persistentSoakSeconds <seconds>` or
  * the shared `-e screenOffSeconds <seconds>` argument the CI gate passes; the
  * service must survive both the screen-off and the forced-Doze window.
@@ -76,41 +79,67 @@ class PersistentAssistantServiceTest {
         SystemClock.sleep(BACKGROUND_SETTLE_MS)
         stopService()
 
+        // Derive what the platform may report from the preconditions only: the
+        // permission state and the API level, fed to the pure policy. Nothing
+        // below reads the state under test to decide what to expect, so a
+        // service that reports None, or a type the policy never offers for these
+        // preconditions, fails the first assertion.
+        val hasRecordAudio = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        assertTrue(
+            "RECORD_AUDIO must be granted to exercise the microphone candidate",
+            hasRecordAudio,
+        )
+        val allowedTypes = PersistentAssistant.attemptOrder(
+            hasRecordAudio = hasRecordAudio,
+            sdkInt = Build.VERSION.SDK_INT,
+        )
+        assertTrue("the policy must offer a foreground type", allowedTypes.isNotEmpty())
+
         PersistentAssistantController.startFromForeground(context)
 
         await("foreground start", SERVICE_START_TIMEOUT_MS) {
             PersistentAssistant.state.value.running
         }
         val state = PersistentAssistant.state.value
-        val hasRecordAudio = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
 
         // Instrumentation grants the target process background-activity-start
         // privileges, so the microphone type can be accepted even after Home.
         // When the real background restriction fires, the service must record
-        // the refusal and fall back to specialUse instead.
-        val expectedType = when {
-            state.micRefusal != null -> {
-                assertTrue(
-                    "a microphone refusal requires RECORD_AUDIO",
-                    hasRecordAudio,
-                )
-                assertNotNull(
-                    "the microphone refusal must be recorded",
-                    state.micRefusal,
-                )
-                AssistantForegroundType.SpecialUse
-            }
-
-            hasRecordAudio -> AssistantForegroundType.Microphone
-            else -> AssistantForegroundType.SpecialUse
+        // the refusal and fall back to specialUse instead. Either outcome is
+        // allowed here, but the reported type must be one the preconditions
+        // allow and must agree with the refusal record.
+        assertTrue(
+            "the service reported ${state.foregroundType}, which the policy never " +
+                "offers for hasRecordAudio=$hasRecordAudio on API ${Build.VERSION.SDK_INT}; " +
+                "allowed: $allowedTypes",
+            state.foregroundType in allowedTypes,
+        )
+        if (state.micRefusal != null) {
+            assertTrue(
+                "a microphone refusal requires RECORD_AUDIO",
+                hasRecordAudio,
+            )
+            assertNotEquals(
+                "a recorded microphone refusal contradicts an accepted microphone type",
+                AssistantForegroundType.Microphone,
+                state.foregroundType,
+            )
         }
-        assertEquals(expectedType, state.foregroundType)
+        if (state.foregroundType == AssistantForegroundType.Microphone) {
+            assertNull(
+                "an accepted microphone type must clear the refusal record",
+                state.micRefusal,
+            )
+        }
 
         val dump = device.executeShellCommand(
             "dumpsys activity services ${context.packageName}",
         )
-        when (expectedType) {
+        // The dumpsys assertion is keyed on the type the service actually
+        // reported, so it is real platform evidence for that claim rather than a
+        // restatement of it.
+        when (state.foregroundType) {
             AssistantForegroundType.Microphone -> assertTrue(
                 "dumpsys must report the microphone type:\n$dump",
                 dumpsysHasForegroundType(
