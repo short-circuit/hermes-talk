@@ -391,7 +391,18 @@ fails rather than skips when the relay is unreachable.
 Both jobs upload their instrumentation results as artifacts, so a red run keeps
 the JUnit XML.
 
-Run record: see *CI run* below.
+Run record: [run 42036584341](https://github.com/short-circuit/hermes-talk/actions/runs/42036584341)
+on `feat/rtvi-call-loop` at `295d9ff` — all six jobs green.
+`android-instrumentation` installed the APKs, granted the role
+(`instrumentation: assistant role held by com.example.hermestalk`), ran 35 tests
+(`0 failure(s), 0 error(s), 0 skipped`), verified all six required cases
+(including `assistKeyOpensTheAssistantOnTheCallScreen`), then ran the 120 s
+`@LargeTest` soak (1 test, 0 skipped). `android-container-e2e` downloaded and
+verified the pinned weights, brought the committed stack up (`relay healthy;
+/health and /ready answer 200 on 127.0.0.1:8790`), issued a device token and ran
+`ContainerCallE2ETest` (1 test, 0 skipped) with a real app-observed line:
+`endpointing+stt=1569ms brain=0ms tts_start=0ms tts_audio_report=2477ms
+tts_audio=124800B/1300.0ms transcript='WHAT TIME IS IT' reply='It's 13:40.'`.
 
 ## Fixtures
 
