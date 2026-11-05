@@ -21,7 +21,7 @@ set -euo pipefail
 
 CURL=${CURL:-curl}
 
-MODELS_DIR=${MODELS_DIR:-}
+MODELS_DIR=${MODELS_DIR:-${HERMES_TALK_MODELS:-}}
 if [ -z "$MODELS_DIR" ]; then
     printf 'fetch-e2e-models: set MODELS_DIR (or HERMES_TALK_MODELS) to the model directory\n' >&2
     exit 2
@@ -70,14 +70,18 @@ verified_file "$MODELS_DIR/$TTS_MODEL" "$TTS_MODEL_SHA" "$TTS_MODEL_URL"
 verified_file "$MODELS_DIR/$TTS_VOICES" "$TTS_VOICES_SHA" "$TTS_VOICES_URL"
 
 # The sherpa archive is kept only long enough to extract it; the relay mounts
-# the extracted directory, not the tarball.
+# the extracted directory, not the tarball. When the extraction already exists
+# the archive is not downloaded again, and an operator's own copy is not
+# deleted.
 stt_tar="$MODELS_DIR/$STT_TAR"
-verified_file "$stt_tar" "$STT_SHA" "$STT_URL"
 if [ ! -f "$MODELS_DIR/$STT_DIR/encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx" ]; then
+    verified_file "$stt_tar" "$STT_SHA" "$STT_URL"
     printf 'fetch-e2e-models: extracting %s\n' "$stt_tar"
     tar -xjf "$stt_tar" -C "$MODELS_DIR"
+    rm -f "$stt_tar"
+else
+    printf 'fetch-e2e-models: %s already extracted\n' "$STT_DIR"
 fi
-rm -f "$stt_tar"
 
 # The compose file points WHISPER_MODEL_DIR at this directory. The E2E run uses
 # the sherpa engine, so the weights are not opened; the directory only has to
